@@ -4,6 +4,9 @@ from dn_splatter.data.normal_nerfstudio import NormalNerfstudioConfig
 from dn_splatter.dn_datamanager import DNSplatterManagerConfig
 from dn_splatter.dn_model import DNSplatterModelConfig
 from dn_splatter.dn_pipeline import DNSplatterPipelineConfig
+
+from dn_splatter.dn_trainer import DNTrainerConfig
+
 from nerfstudio.configs.base_config import ViewerConfig
 from nerfstudio.engine.optimizers import AdamOptimizerConfig
 from nerfstudio.engine.schedulers import ExponentialDecaySchedulerConfig
@@ -11,11 +14,12 @@ from nerfstudio.engine.trainer import TrainerConfig
 from nerfstudio.plugins.types import MethodSpecification
 
 dn_splatter = MethodSpecification(
-    config=TrainerConfig(
+    # config=TrainerConfig(
+    config=DNTrainerConfig(
         method_name="dn-splatter",
         steps_per_eval_image=500,
         steps_per_eval_batch=500,
-        steps_per_save=1000000,
+        steps_per_save=500, #1000000,
         steps_per_eval_all_images=1000000,
         max_num_iterations=30000,
         mixed_precision=False,
@@ -30,7 +34,8 @@ dn_splatter = MethodSpecification(
             "means": {
                 "optimizer": AdamOptimizerConfig(lr=1.6e-4, eps=1e-15),
                 "scheduler": ExponentialDecaySchedulerConfig(
-                    lr_final=1.6e-6, max_steps=30000
+                    lr_final=1.6e-6, 
+                    max_steps=30000
                 ),
             },
             "features_dc": {

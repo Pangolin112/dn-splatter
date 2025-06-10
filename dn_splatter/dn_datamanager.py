@@ -10,6 +10,9 @@ from typing import Dict, Literal, Tuple, Type, Union
 import torch
 import torchvision.transforms.functional as TF
 
+import cv2
+import numpy as np
+
 from dn_splatter.data.dn_dataset import GDataset
 from nerfstudio.cameras.cameras import Cameras
 from nerfstudio.data.datamanagers.full_images_datamanager import (
@@ -58,6 +61,26 @@ class DNSplatterDataManager(FullImageDatamanager):
             local_rank=local_rank,
             **kwargs,
         )
+
+        ######################################################
+        # Secret view updating                              
+        ######################################################
+        # from igs2gs_datamanager.py
+        # add depth into the cache
+        depth_fnames = self.train_dataparser_outputs.metadata.get("depth_filenames", None)
+        if depth_fnames is not None:
+            # choose whether to keep CPU or move to GPU based on your cache_images setting
+            to_device = (lambda x: x.to(self.device)) if self.config.cache_images == "gpu" else (lambda x: x)
+            for sample, depth_path in zip(self.cached_train, depth_fnames):
+                depth_np = cv2.imread(str(depth_path), cv2.IMREAD_UNCHANGED).astype(np.float32)
+                depth_t  = torch.from_numpy(depth_np)[None, ...]
+                sample["depth"] = to_device(depth_t)
+
+        # cache original training images for ip2p
+        self.original_cached_train = deepcopy(self.cached_train)
+        self.original_cached_eval = deepcopy(self.cached_eval)
+        ######################################################
+
         metadata = self.train_dataparser_outputs.metadata
         self.load_depths = (
             True
@@ -222,4 +245,34 @@ class DNSplatterDataManager(FullImageDatamanager):
             len(self.eval_dataset.cameras.shape) == 1
         ), "Assumes single batch dimension"
         camera = self.eval_dataset.cameras[image_idx : image_idx + 1].to(self.device)
+        return camera, data
+
+    # from igs2gs_datamanager.py
+    def next_train_idx(self, idx: int) -> Tuple[Cameras, Dict]:
+        """Returns the next training batch
+
+        Returns a Camera instead of raybundle"""
+        data = deepcopy(self.cached_train[idx])
+        data["image"] = data["image"].to(self.device)
+        # add depth into the cache
+        data["depth"] = data["depth"].to(self.device)
+        if "mask" in data:
+            data["mask"] = data["mask"].to(self.device)
+        if self.load_depths:
+            if "sensor_depth" in data:
+                data["sensor_depth"] = data["sensor_depth"].to(self.device)
+            if "mono_depth" in data:
+                data["mono_depth"] = data["mono_depth"].to(self.device)
+        if self.load_normals:
+            assert "normal" in data
+            data["normal"] = data["normal"].to(self.device)
+        if self.load_confidence:
+            assert "confidence" in data
+            data["confidence"] = data["confidence"].to(self.device)
+
+        assert len(self.train_dataset.cameras.shape) == 1, "Assumes single batch dimension"
+        camera = self.train_dataset.cameras[idx : idx + 1].to(self.device)
+        if camera.metadata is None:
+            camera.metadata = {}
+        camera.metadata["cam_idx"] = idx
         return camera, data
