@@ -80,7 +80,7 @@ seed: 99
 
 # prompts
 prompt_1: "a castle"
-prompt_2: "make it a japanese style living room"
+prompt_2: "make it look like it just snowed"
 a_prompt: ", best quality, high quality, extremely detailed, good geometry, high-res photo"
 n_prompt: "deformed, extra digit, fewer digits, cropped, worst quality, low quality, smoke, shading, lighting, lumination, shadow, text in image, watermarks"
 
@@ -102,12 +102,12 @@ blending_ratio_default: 1.0 #default: 1.0 fully use the ref phase in direct tran
 
 # IP2P
 t_dec: 20
-image_guidance_scale_ip2p: 2.0 # decrease the cs would create better results w depth condition
-image_guidance_scale_ip2p_ptd: 2.0 # increase the cs would make the results more similar to the input image 
+image_guidance_scale_ip2p: 1.5 # decrease the cs would create better results w depth condition
+image_guidance_scale_ip2p_ptd: 1.5 # increase the cs would make the results more similar to the input image 
 lower_bound: 0.98 # the higher the better
 upper_bound: 0.99 # the higher the better
 
-edit_rate: 1 # higher value, faster training, less editing
+edit_rate: 10 # higher value, faster training, less editing
 
 interpolate_scale: 1.0 # default: 1.0, no interpolation; 0.0, full interpolation
 async_ahead_steps: 20 # default: 0, no async ahead; [-10, 10] (original PTD), the higher the better embedding effects

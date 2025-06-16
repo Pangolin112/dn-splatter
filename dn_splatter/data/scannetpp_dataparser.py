@@ -43,9 +43,9 @@ class ScanNetppDataParserConfig(ColmapDataParserConfig):
     """target class to instantiate"""
     data: Path = Path("datasets/scannetpp/data")
     """Directory to the root of the data."""
-    sequence: Literal["8b5caf3398", "b20a261fdf"] = "b20a261fdf"
+    sequence: Literal["8b5caf3398", "b20a261fdf", "fb5a96b1a2"] = "fb5a96b1a2"
     """room name"""
-    mode: Literal["dslr", "iphone"] = "iphone"
+    mode: Literal["dslr", "iphone"] = "dslr"
     """Which camera to use"""
     depth_mode: Literal["mono", "sensor", "none", "all"] = "sensor"
     """Which depth data to load"""
@@ -102,9 +102,9 @@ class ScanNetpp(ColmapDataParser):
         ), f"Data directory {self.input_folder} does not exist."
 
         if self.config.mode == "dslr":
-            self.input_folder = (
-                self.input_folder / "undistort_colmap" / self.config.sequence
-            )
+            # self.input_folder = (
+            #     self.input_folder / "undistort_colmap" / self.config.sequence
+            # )
             colmap_path = self.input_folder / "colmap"
             data_dir = self.input_folder / "images"
             mask_dir = self.input_folder / "masks"
