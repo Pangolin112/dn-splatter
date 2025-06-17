@@ -100,6 +100,8 @@ transfer_ratio: 0.0 #default: 0.0; if not == 0.0, should be (1 - direct_transfer
 
 blending_ratio_default: 1.0 #default: 1.0 fully use the ref phase in direct transfer stage; if set to 0.0, no phase transfer
 
+async_ahead_steps: 20 # default: 0, no async ahead; [-10, 10] (original PTD), the higher the better embedding effects
+
 # IP2P
 t_dec: 20
 image_guidance_scale_ip2p: 1.5 # decrease the cs would create better results w depth condition
@@ -107,10 +109,9 @@ image_guidance_scale_ip2p_ptd: 1.5 # increase the cs would make the results more
 lower_bound: 0.98 # the higher the better
 upper_bound: 0.99 # the higher the better
 
-edit_rate: 10 # higher value, faster training, less editing
+edit_rate: 5 # higher value, faster training, less editing
 
 interpolate_scale: 1.0 # default: 1.0, no interpolation; 0.0, full interpolation
-async_ahead_steps: 20 # default: 0, no async ahead; [-10, 10] (original PTD), the higher the better embedding effects
 
 secret_view_idx: 6
 secret_weight: 0.5 # default: 0.5
