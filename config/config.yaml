@@ -104,8 +104,8 @@ async_ahead_steps: 20 # default: 0, no async ahead; [-10, 10] (original PTD), th
 
 # IP2P
 t_dec: 20
-image_guidance_scale_ip2p: 1.5 # decrease the cs would create better results w depth condition
-image_guidance_scale_ip2p_ptd: 1.5 # increase the cs would make the results more similar to the input image 
+image_guidance_scale_ip2p: 1.2 # decrease the cs would create better results w depth condition
+image_guidance_scale_ip2p_ptd: 2.0 # increase the cs would make the results more similar to the input image 
 lower_bound: 0.98 # the higher the better
 upper_bound: 0.99 # the higher the better
 
