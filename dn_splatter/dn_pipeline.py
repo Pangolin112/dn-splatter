@@ -185,6 +185,11 @@ class DNSplatterPipeline(VanillaPipeline):
         self.camera_secret, self.data_secret = self.datamanager.next_train_idx(secret_view_idx)
         self.original_image_secret = self.datamanager.original_cached_train[secret_view_idx]["image"].unsqueeze(dim=0).permute(0, 3, 1, 2)
         self.depth_image_secret = self.datamanager.original_cached_train[secret_view_idx]["depth"] # [bs, h, w]
+
+        secret_view_idx_2 = self.config_secret.secret_view_idx_2
+        self.camera_secret_2, self.data_secret_2 = self.datamanager.next_train_idx(secret_view_idx_2)
+        self.original_image_secret_2 = self.datamanager.original_cached_train[secret_view_idx_2]["image"].unsqueeze(dim=0).permute(0, 3, 1, 2)
+        self.depth_image_secret_2 = self.datamanager.original_cached_train[secret_view_idx_2]["depth"] # [bs, h, w]
         ######################################################
     
     # add callback function to fetch the components from other parts of the training process.
@@ -194,14 +199,285 @@ class DNSplatterPipeline(VanillaPipeline):
         # now return whatever callbacks the base class wants
         return super().get_training_callbacks(attrs)
     
+    # comment this function for 1st stage updating, __IGS2GS + IN2N__2_secrets__
+    # we can use only IN2N when the number of images in the dataset is small, since IGS2GS + IN2N has longer training time but same results with IN2N in this case.
+    def get_train_loss_dict(self, step: int):
+        ######################################################
+        # Secret view updating                              
+        ######################################################
+        base_dir = self.trainer.base_dir
+        image_dir = base_dir / f"images_IGS2GS_IN2N_2_secrets_secret_{self.config_secret.image_guidance_scale_ip2p_ptd}_{self.config_secret.secret_edit_rate}_non_secret_{self.config_secret.image_guidance_scale_ip2p}_{self.config_secret.edit_rate}"
+        if not image_dir.exists():
+            image_dir.mkdir(parents=True, exist_ok=True)
+    
+        # if ((step-1) % self.config.gs_steps) == 0:
+        if (step % self.config.gs_steps) == 0 and (self.first_SequentialEdit): # update also for the first step
+            self.makeSquentialEdits = True
 
-    # comment this function for 1st stage updating, __update all images at once__then randomly update 1 image__
+        if (not self.makeSquentialEdits):
+            # the implementation of randomly selecting an index to edit instead of update all images at once
+            # generate the indexes for non-secret view editing
+            all_indices = np.arange(len(self.datamanager.cached_train))
+            allowed = all_indices[all_indices != self.config_secret.secret_view_idx]
+
+            if step % self.config_secret.edit_rate == 0:
+                #----------------non-secret view editing----------------
+                # randomly select an index to edit
+                idx = random.choice(allowed)
+                camera, data = self.datamanager.next_train_idx(idx)
+                model_outputs = self.model(camera)
+                metrics_dict = self.model.get_metrics_dict(model_outputs, data)
+
+                original_image = self.datamanager.original_cached_train[idx]["image"].unsqueeze(dim=0).permute(0, 3, 1, 2)
+                rendered_image = model_outputs["rgb"].detach().unsqueeze(dim=0).permute(0, 3, 1, 2)
+
+                depth_image = self.datamanager.original_cached_train[idx]["depth"] # [bs, h, w]
+
+                edited_image, depth_tensor = self.ip2p_depth.edit_image_depth(
+                    self.text_embeddings_ip2p.to(self.config_secret.device),
+                    rendered_image.to(self.dtype),
+                    original_image.to(self.config_secret.device).to(self.dtype),
+                    False, # is depth tensor
+                    depth_image,
+                    guidance_scale=self.config_secret.guidance_scale,
+                    image_guidance_scale=self.config_secret.image_guidance_scale_ip2p,
+                    diffusion_steps=self.config_secret.t_dec,
+                    lower_bound=self.config_secret.lower_bound,
+                    upper_bound=self.config_secret.upper_bound,
+                )
+
+                # resize to original image size (often not necessary)
+                if (edited_image.size() != rendered_image.size()):
+                    edited_image = torch.nn.functional.interpolate(edited_image, size=rendered_image.size()[2:], mode='bilinear')
+
+                # write edited image to dataloader
+                edited_image = edited_image.to(original_image.dtype)
+                self.datamanager.cached_train[idx]["image"] = edited_image.squeeze().permute(1,2,0)
+                data["image"] = edited_image.squeeze().permute(1,2,0)
+
+                # save edited non-secret image
+                if step % 50 == 0:
+                    image_save_non_secret = torch.cat([depth_tensor, rendered_image, edited_image.to(self.config_secret.device), original_image.to(self.config_secret.device)])
+                    save_image((image_save_non_secret).clamp(0, 1), image_dir / f'{step}_non_secret_image.png')
+
+                loss_dict = self.model.get_loss_dict(model_outputs, data, metrics_dict)
+
+                #----------------secret view editing----------------
+                if step % self.config_secret.secret_edit_rate == 0:
+                    model_outputs_secret = self.model(self.camera_secret)
+                    metrics_dict_secret = self.model.get_metrics_dict(model_outputs_secret, self.data_secret)
+                    loss_dict_secret = self.model.get_loss_dict(model_outputs_secret, self.data_secret, metrics_dict_secret)
+                    rendered_image_secret = model_outputs_secret["rgb"].detach().unsqueeze(dim=0).permute(0, 3, 1, 2)
+                    edited_image_secret, depth_tensor_secret = self.ip2p_ptd.edit_image_depth(
+                        image=rendered_image_secret.to(self.dtype), # input should be B, 3, H, W, in [0, 1]
+                        image_cond=self.original_image_secret.to(self.config_secret.device).to(self.dtype),
+                        secret_idx=0,
+                        depth=self.depth_image_secret,
+                        lower_bound=self.config_secret.lower_bound,
+                        upper_bound=self.config_secret.upper_bound
+                    )
+
+                    # resize to original image size (often not necessary)
+                    if (edited_image_secret.size() != rendered_image_secret.size()):
+                        edited_image_secret = torch.nn.functional.interpolate(edited_image_secret, size=rendered_image_secret.size()[2:], mode='bilinear')
+
+                    # write edited image to dataloader
+                    edited_image_secret = edited_image_secret.to(self.original_image_secret.dtype)
+                    self.datamanager.cached_train[self.config_secret.secret_view_idx]["image"] = edited_image_secret.squeeze().permute(1,2,0)
+                    self.data_secret["image"] = edited_image_secret.squeeze().permute(1,2,0)
+
+                    for k, v in metrics_dict_secret.items():
+                        metrics_dict[f"secret_{k}"] = v
+                    for k, v in loss_dict_secret.items():
+                        loss_dict[f"secret_{k}"] = v
+
+                    # also edit the second secret view
+                    model_outputs_secret_2 = self.model(self.camera_secret_2)
+                    metrics_dict_secret_2 = self.model.get_metrics_dict(model_outputs_secret_2, self.data_secret_2)
+                    loss_dict_secret_2 = self.model.get_loss_dict(model_outputs_secret_2, self.data_secret_2, metrics_dict_secret_2)
+                    rendered_image_secret_2 = model_outputs_secret_2["rgb"].detach().unsqueeze(dim=0).permute(0, 3, 1, 2)
+                    edited_image_secret_2, depth_tensor_secret_2 = self.ip2p_ptd.edit_image_depth(
+                        image=rendered_image_secret_2.to(self.dtype), # input should be B, 3, H, W, in [0, 1]
+                        image_cond=self.original_image_secret_2.to(self.config_secret.device).to(self.dtype),
+                        secret_idx=1,
+                        depth=self.depth_image_secret_2,
+                        lower_bound=self.config_secret.lower_bound,
+                        upper_bound=self.config_secret.upper_bound
+                    )
+                    # resize to original image size (often not necessary)
+                    if (edited_image_secret_2.size() != rendered_image_secret_2.size()):
+                        edited_image_secret_2 = torch.nn.functional.interpolate(edited_image_secret_2, size=rendered_image_secret_2.size()[2:], mode='bilinear')
+                    
+                    # write edited image to dataloader
+                    edited_image_secret_2 = edited_image_secret_2.to(self.original_image_secret_2.dtype)
+                    self.datamanager.cached_train[self.config_secret.secret_view_idx_2]["image"] = edited_image_secret_2.squeeze().permute(1,2,0)
+                    self.data_secret_2["image"] = edited_image_secret_2.squeeze().permute(1,2,0)
+
+                    for k, v in metrics_dict_secret_2.items():
+                        metrics_dict[f"secret_2_{k}"] = v
+                    for k, v in loss_dict_secret_2.items():
+                        loss_dict[f"secret_2_{k}"] = v
+                    
+                    # save edited secret image
+                    if step % 50 == 0:
+                        image_save_secret = torch.cat([depth_tensor_secret, rendered_image_secret, edited_image_secret.to(self.config_secret.device), self.original_image_secret.to(self.config_secret.device)])
+                        save_image((image_save_secret).clamp(0, 1), image_dir / f'{step}_secret_image.png')
+                        image_save_secret_2 = torch.cat([depth_tensor_secret_2, rendered_image_secret_2, edited_image_secret_2.to(self.config_secret.device), self.original_image_secret_2.to(self.config_secret.device)])
+                        save_image((image_save_secret_2).clamp(0, 1), image_dir / f'{step}_secret_image_2.png')
+            else:
+                # non-editing steps loss computing
+                camera, data = self.datamanager.next_train(step)
+                model_outputs = self.model(camera)
+                metrics_dict = self.model.get_metrics_dict(model_outputs, data)
+                loss_dict = self.model.get_loss_dict(model_outputs, data, metrics_dict)
+
+                # also update the secret view w/o editing (important)
+                model_outputs_secret = self.model(self.camera_secret)
+                metrics_dict_secret = self.model.get_metrics_dict(model_outputs_secret, self.data_secret)
+                loss_dict_secret = self.model.get_loss_dict(model_outputs_secret, self.data_secret, metrics_dict_secret)
+
+                for k, v in metrics_dict_secret.items():
+                    metrics_dict[f"secret_{k}"] = v
+                for k, v in loss_dict_secret.items():
+                    loss_dict[f"secret_{k}"] = v
+
+                # also update the second secret view w/o editing (important)
+                model_outputs_secret_2 = self.model(self.camera_secret_2)
+                metrics_dict_secret_2 = self.model.get_metrics_dict(model_outputs_secret_2, self.data_secret_2)
+                loss_dict_secret_2 = self.model.get_loss_dict(model_outputs_secret_2, self.data_secret_2, metrics_dict_secret_2)
+
+                for k, v in metrics_dict_secret_2.items():
+                    metrics_dict[f"secret_2_{k}"] = v
+                for k, v in loss_dict_secret_2.items():
+                    loss_dict[f"secret_2_{k}"] = v
+
+        else:
+            # get index
+            idx = self.curr_edit_idx
+            camera, data = self.datamanager.next_train_idx(idx)
+            model_outputs = self.model(camera)
+            metrics_dict = self.model.get_metrics_dict(model_outputs, data)
+
+            original_image = self.datamanager.original_cached_train[idx]["image"].unsqueeze(dim=0).permute(0, 3, 1, 2)
+            rendered_image = model_outputs["rgb"].detach().unsqueeze(dim=0).permute(0, 3, 1, 2)
+
+            depth_image = self.datamanager.original_cached_train[idx]["depth"] # [bs, h, w]
+            
+            # edit image using IP2P depth when idx != secret_view_idx
+            if idx != self.config_secret.secret_view_idx and idx != self.config_secret.secret_view_idx_2:
+                edited_image, depth_tensor = self.ip2p_depth.edit_image_depth(
+                    self.text_embeddings_ip2p.to(self.config_secret.device),
+                    rendered_image.to(self.dtype),
+                    original_image.to(self.config_secret.device).to(self.dtype),
+                    False, # is depth tensor
+                    depth_image,
+                    guidance_scale=self.config_secret.guidance_scale,
+                    image_guidance_scale=self.config_secret.image_guidance_scale_ip2p,
+                    diffusion_steps=self.config_secret.t_dec,
+                    lower_bound=self.config_secret.lower_bound,
+                    upper_bound=self.config_secret.upper_bound,
+                )
+
+                # resize to original image size (often not necessary)
+                if (edited_image.size() != rendered_image.size()):
+                    edited_image = torch.nn.functional.interpolate(edited_image, size=rendered_image.size()[2:], mode='bilinear')
+
+                # write edited image to dataloader
+                edited_image = edited_image.to(original_image.dtype)
+                self.datamanager.cached_train[idx]["image"] = edited_image.squeeze().permute(1,2,0)
+                data["image"] = edited_image.squeeze().permute(1,2,0)
+
+                # save edited non-secret image
+                if step % 25 == 0:
+                    image_save_non_secret = torch.cat([depth_tensor, rendered_image, edited_image.to(self.config_secret.device), original_image.to(self.config_secret.device)])
+                    save_image((image_save_non_secret).clamp(0, 1), image_dir / f'{step}_non_secret_image.png')
+
+            loss_dict = self.model.get_loss_dict(model_outputs, data, metrics_dict)
+
+            # edit image using IP2P + PTD when idx == secret_view_idx
+            if idx == self.config_secret.secret_view_idx:
+                model_outputs_secret = self.model(self.camera_secret)
+                metrics_dict_secret = self.model.get_metrics_dict(model_outputs_secret, self.data_secret)
+                loss_dict_secret = self.model.get_loss_dict(model_outputs_secret, self.data_secret, metrics_dict_secret)
+                rendered_image_secret = model_outputs_secret["rgb"].detach().unsqueeze(dim=0).permute(0, 3, 1, 2)
+                edited_image_secret, depth_tensor_secret = self.ip2p_ptd.edit_image_depth(
+                    image=rendered_image_secret.to(self.dtype), # input should be B, 3, H, W, in [0, 1]
+                    image_cond=self.original_image_secret.to(self.config_secret.device).to(self.dtype),
+                    secret_idx=0,
+                    depth=self.depth_image_secret,
+                    lower_bound=self.config_secret.lower_bound,
+                    upper_bound=self.config_secret.upper_bound
+                )
+
+                # resize to original image size (often not necessary)
+                if (edited_image_secret.size() != rendered_image_secret.size()):
+                    edited_image_secret = torch.nn.functional.interpolate(edited_image_secret, size=rendered_image_secret.size()[2:], mode='bilinear')
+
+                # write edited image to dataloader
+                edited_image_secret = edited_image_secret.to(self.original_image_secret.dtype)
+                self.datamanager.cached_train[self.config_secret.secret_view_idx]["image"] = edited_image_secret.squeeze().permute(1,2,0)
+                self.data_secret["image"] = edited_image_secret.squeeze().permute(1,2,0)
+
+                for k, v in metrics_dict_secret.items():
+                    metrics_dict[f"secret_{k}"] = v
+                for k, v in loss_dict_secret.items():
+                    loss_dict[f"secret_{k}"] = v
+                
+                # save edited secret image
+                image_save_secret = torch.cat([depth_tensor_secret, rendered_image_secret, edited_image_secret.to(self.config_secret.device), self.original_image_secret.to(self.config_secret.device)])
+                save_image((image_save_secret).clamp(0, 1), image_dir / f'{step}_secret_image.png')
+
+            if idx == self.config_secret.secret_view_idx_2:
+                model_outputs_secret_2 = self.model(self.camera_secret_2)
+                metrics_dict_secret_2 = self.model.get_metrics_dict(model_outputs_secret_2, self.data_secret_2)
+                loss_dict_secret_2 = self.model.get_loss_dict(model_outputs_secret_2, self.data_secret_2, metrics_dict_secret_2)
+                rendered_image_secret_2 = model_outputs_secret_2["rgb"].detach().unsqueeze(dim=0).permute(0, 3, 1, 2)
+                edited_image_secret_2, depth_tensor_secret_2 = self.ip2p_ptd.edit_image_depth(
+                    image=rendered_image_secret_2.to(self.dtype), # input should be B, 3, H, W, in [0, 1]
+                    image_cond=self.original_image_secret_2.to(self.config_secret.device).to(self.dtype),
+                    secret_idx=1,
+                    depth=self.depth_image_secret_2,
+                    lower_bound=self.config_secret.lower_bound,
+                    upper_bound=self.config_secret.upper_bound
+                )
+                # resize to original image size (often not necessary)
+                if (edited_image_secret_2.size() != rendered_image_secret_2.size()):
+                    edited_image_secret_2 = torch.nn.functional.interpolate(edited_image_secret_2, size=rendered_image_secret_2.size()[2:], mode='bilinear')
+                
+                # write edited image to dataloader
+                edited_image_secret_2 = edited_image_secret_2.to(self.original_image_secret_2.dtype)
+                self.datamanager.cached_train[self.config_secret.secret_view_idx_2]["image"] = edited_image_secret_2.squeeze().permute(1,2,0)
+                self.data_secret_2["image"] = edited_image_secret_2.squeeze().permute(1,2,0)
+
+                for k, v in metrics_dict_secret_2.items():
+                    metrics_dict[f"secret_2_{k}"] = v
+                for k, v in loss_dict_secret_2.items():
+                    loss_dict[f"secret_2_{k}"] = v
+                
+                # save edited secret image
+                image_save_secret = torch.cat([depth_tensor_secret_2, rendered_image_secret_2, edited_image_secret_2.to(self.config_secret.device), self.original_image_secret_2.to(self.config_secret.device)])
+                save_image((image_save_secret).clamp(0, 1), image_dir / f'{step}_secret_image_2.png')
+
+            #increment curr edit idx
+            # and update all the images in the dataset
+            self.curr_edit_idx += 1
+            # self.makeSquentialEdits = False
+            if (self.curr_edit_idx >= len(self.datamanager.cached_train)):
+                self.curr_edit_idx = 0
+                self.makeSquentialEdits = False
+                self.first_SequentialEdit = False
+
+        return model_outputs, loss_dict, metrics_dict
+        ######################################################
+
+    # comment this function for 1st stage updating, __IGS2GS + IN2N__
+    # we can use only IN2N when the number of images in the dataset is small, since IGS2GS + IN2N has longer training time but same results with IN2N in this case.
     # def get_train_loss_dict(self, step: int):
     #     ######################################################
     #     # Secret view updating                              
     #     ######################################################
     #     base_dir = self.trainer.base_dir
-    #     image_dir = base_dir / "images"
+    #     image_dir = base_dir / f"images_IGS2GS_IN2N_secret_{self.config_secret.image_guidance_scale_ip2p_ptd}_{self.config_secret.secret_edit_rate}_non_secret_{self.config_secret.image_guidance_scale_ip2p}_{self.config_secret.edit_rate}"
     #     if not image_dir.exists():
     #         image_dir.mkdir(parents=True, exist_ok=True)
     
@@ -253,12 +529,12 @@ class DNSplatterPipeline(VanillaPipeline):
     #             # save edited non-secret image
     #             if step % 50 == 0:
     #                 image_save_non_secret = torch.cat([depth_tensor, rendered_image, edited_image.to(self.config_secret.device), original_image.to(self.config_secret.device)])
-    #                 save_image((image_save_non_secret).clamp(0, 1), image_dir / f'{step}_non_secret_image_{self.config_secret.image_guidance_scale_ip2p}_edit_rate_{self.config_secret.edit_rate}.png')
+    #                 save_image((image_save_non_secret).clamp(0, 1), image_dir / f'{step}_non_secret_image.png')
 
     #             loss_dict = self.model.get_loss_dict(model_outputs, data, metrics_dict)
 
     #             #----------------secret view editing----------------
-    #             if step % 20 == 0:
+    #             if step % self.config_secret.secret_edit_rate == 0:
     #                 model_outputs_secret = self.model(self.camera_secret)
     #                 metrics_dict_secret = self.model.get_metrics_dict(model_outputs_secret, self.data_secret)
     #                 loss_dict_secret = self.model.get_loss_dict(model_outputs_secret, self.data_secret, metrics_dict_secret)
@@ -266,6 +542,7 @@ class DNSplatterPipeline(VanillaPipeline):
     #                 edited_image_secret, depth_tensor_secret = self.ip2p_ptd.edit_image_depth(
     #                     image=rendered_image_secret.to(self.dtype), # input should be B, 3, H, W, in [0, 1]
     #                     image_cond=self.original_image_secret.to(self.config_secret.device).to(self.dtype),
+    #                     secret_idx=0,
     #                     depth=self.depth_image_secret,
     #                     lower_bound=self.config_secret.lower_bound,
     #                     upper_bound=self.config_secret.upper_bound
@@ -288,7 +565,7 @@ class DNSplatterPipeline(VanillaPipeline):
     #                 # save edited secret image
     #                 if step % 50 == 0:
     #                     image_save_secret = torch.cat([depth_tensor_secret, rendered_image_secret, edited_image_secret.to(self.config_secret.device), self.original_image_secret.to(self.config_secret.device)])
-    #                     save_image((image_save_secret).clamp(0, 1), image_dir / f'{step}_secret_image_{self.config_secret.image_guidance_scale_ip2p_ptd}_edit_rate_{self.config_secret.edit_rate}.png')
+    #                     save_image((image_save_secret).clamp(0, 1), image_dir / f'{step}_secret_image.png')
     #         else:
     #             # non-editing steps loss computing
     #             camera, data = self.datamanager.next_train(step)
@@ -317,17 +594,6 @@ class DNSplatterPipeline(VanillaPipeline):
     #         rendered_image = model_outputs["rgb"].detach().unsqueeze(dim=0).permute(0, 3, 1, 2)
 
     #         depth_image = self.datamanager.original_cached_train[idx]["depth"] # [bs, h, w]
-
-    #         # edited_image = self.ip2p.edit_image(
-    #         #             self.text_embedding.to(self.ip2p_device),
-    #         #             rendered_image.to(self.ip2p_device),
-    #         #             original_image.to(self.ip2p_device),
-    #         #             guidance_scale=self.config.guidance_scale,
-    #         #             image_guidance_scale=self.config.image_guidance_scale,
-    #         #             diffusion_steps=self.config.diffusion_steps,
-    #         #             lower_bound=self.config.lower_bound,
-    #         #             upper_bound=self.config.upper_bound,
-    #         #         )
             
     #         # edit image using IP2P depth when idx != secret_view_idx
     #         if idx != self.config_secret.secret_view_idx:
@@ -356,12 +622,117 @@ class DNSplatterPipeline(VanillaPipeline):
     #             # save edited non-secret image
     #             if step % 25 == 0:
     #                 image_save_non_secret = torch.cat([depth_tensor, rendered_image, edited_image.to(self.config_secret.device), original_image.to(self.config_secret.device)])
-    #                 save_image((image_save_non_secret).clamp(0, 1), image_dir / f'{step}_non_secret_image_{self.config_secret.image_guidance_scale_ip2p_ptd}.png')
+    #                 save_image((image_save_non_secret).clamp(0, 1), image_dir / f'{step}_non_secret_image.png')
 
     #         loss_dict = self.model.get_loss_dict(model_outputs, data, metrics_dict)
 
     #         # edit image using IP2P + PTD when idx == secret_view_idx
     #         if idx == self.config_secret.secret_view_idx:
+    #             model_outputs_secret = self.model(self.camera_secret)
+    #             metrics_dict_secret = self.model.get_metrics_dict(model_outputs_secret, self.data_secret)
+    #             loss_dict_secret = self.model.get_loss_dict(model_outputs_secret, self.data_secret, metrics_dict_secret)
+    #             rendered_image_secret = model_outputs_secret["rgb"].detach().unsqueeze(dim=0).permute(0, 3, 1, 2)
+    #             edited_image_secret, depth_tensor_secret = self.ip2p_ptd.edit_image_depth(
+    #                 image=rendered_image_secret.to(self.dtype), # input should be B, 3, H, W, in [0, 1]
+    #                 image_cond=self.original_image_secret.to(self.config_secret.device).to(self.dtype),
+    #                 secret_idx=0,
+    #                 depth=self.depth_image_secret,
+    #                 lower_bound=self.config_secret.lower_bound,
+    #                 upper_bound=self.config_secret.upper_bound
+    #             )
+
+    #             # resize to original image size (often not necessary)
+    #             if (edited_image_secret.size() != rendered_image_secret.size()):
+    #                 edited_image_secret = torch.nn.functional.interpolate(edited_image_secret, size=rendered_image_secret.size()[2:], mode='bilinear')
+
+    #             # write edited image to dataloader
+    #             edited_image_secret = edited_image_secret.to(self.original_image_secret.dtype)
+    #             self.datamanager.cached_train[self.config_secret.secret_view_idx]["image"] = edited_image_secret.squeeze().permute(1,2,0)
+    #             self.data_secret["image"] = edited_image_secret.squeeze().permute(1,2,0)
+
+    #             for k, v in metrics_dict_secret.items():
+    #                 metrics_dict[f"secret_{k}"] = v
+    #             for k, v in loss_dict_secret.items():
+    #                 loss_dict[f"secret_{k}"] = v
+                
+    #             # save edited secret image
+    #             image_save_secret = torch.cat([depth_tensor_secret, rendered_image_secret, edited_image_secret.to(self.config_secret.device), self.original_image_secret.to(self.config_secret.device)])
+    #             save_image((image_save_secret).clamp(0, 1), image_dir / f'{step}_secret_image.png')
+
+    #         #increment curr edit idx
+    #         # and update all the images in the dataset
+    #         self.curr_edit_idx += 1
+    #         # self.makeSquentialEdits = False
+    #         if (self.curr_edit_idx >= len(self.datamanager.cached_train)):
+    #             self.curr_edit_idx = 0
+    #             self.makeSquentialEdits = False
+    #             self.first_SequentialEdit = False
+
+    #     return model_outputs, loss_dict, metrics_dict
+        ######################################################
+
+
+    # comment this function for 1st stage updating, __IN2N__
+    # def get_train_loss_dict(self, step: int):
+    #     ######################################################
+    #     # Secret view updating                              
+    #     ######################################################
+    #     base_dir = self.trainer.base_dir
+    #     image_dir = base_dir / f"images_IN2N_secret_{self.config_secret.image_guidance_scale_ip2p_ptd}_{self.config_secret.secret_edit_rate}_non_secret_{self.config_secret.image_guidance_scale_ip2p}_{self.config_secret.edit_rate}"
+    #     if not image_dir.exists():
+    #         image_dir.mkdir(parents=True, exist_ok=True)
+
+    #     # print(step) # start from 30000
+
+    #     # the implementation of randomly selecting an index to edit instead of update all images at once
+    #     # generate the indexes for non-secret view editing
+    #     all_indices = np.arange(len(self.datamanager.cached_train))
+    #     allowed = all_indices[all_indices != self.config_secret.secret_view_idx]
+
+    #     if step % self.config_secret.edit_rate == 0:
+    #         #----------------non-secret view editing----------------
+    #         # randomly select an index to edit
+    #         idx = random.choice(allowed)
+    #         camera, data = self.datamanager.next_train_idx(idx)
+    #         model_outputs = self.model(camera)
+    #         metrics_dict = self.model.get_metrics_dict(model_outputs, data)
+
+    #         original_image = self.datamanager.original_cached_train[idx]["image"].unsqueeze(dim=0).permute(0, 3, 1, 2)
+    #         rendered_image = model_outputs["rgb"].detach().unsqueeze(dim=0).permute(0, 3, 1, 2)
+
+    #         depth_image = self.datamanager.original_cached_train[idx]["depth"] # [bs, h, w]
+
+    #         edited_image, depth_tensor = self.ip2p_depth.edit_image_depth(
+    #             self.text_embeddings_ip2p.to(self.config_secret.device),
+    #             rendered_image.to(self.dtype),
+    #             original_image.to(self.config_secret.device).to(self.dtype),
+    #             False, # is depth tensor
+    #             depth_image,
+    #             guidance_scale=self.config_secret.guidance_scale,
+    #             image_guidance_scale=self.config_secret.image_guidance_scale_ip2p,
+    #             diffusion_steps=self.config_secret.t_dec,
+    #             lower_bound=self.config_secret.lower_bound,
+    #             upper_bound=self.config_secret.upper_bound,
+    #         )
+
+    #         # resize to original image size (often not necessary)
+    #         if (edited_image.size() != rendered_image.size()):
+    #             edited_image = torch.nn.functional.interpolate(edited_image, size=rendered_image.size()[2:], mode='bilinear')
+
+    #         # write edited image to dataloader
+    #         edited_image = edited_image.to(original_image.dtype)
+    #         self.datamanager.cached_train[idx]["image"] = edited_image.squeeze().permute(1,2,0)
+    #         data["image"] = edited_image.squeeze().permute(1,2,0)
+
+    #         # save edited non-secret image
+    #         if step % 50 == 0:
+    #             image_save_non_secret = torch.cat([depth_tensor, rendered_image, edited_image.to(self.config_secret.device), original_image.to(self.config_secret.device)])
+    #             save_image((image_save_non_secret).clamp(0, 1), image_dir / f'{step}_non_secret_image.png')
+
+    #         loss_dict = self.model.get_loss_dict(model_outputs, data, metrics_dict)
+
+    #         #----------------secret view editing----------------
+    #         if step % self.config_secret.secret_edit_rate == 0:
     #             model_outputs_secret = self.model(self.camera_secret)
     #             metrics_dict_secret = self.model.get_metrics_dict(model_outputs_secret, self.data_secret)
     #             loss_dict_secret = self.model.get_loss_dict(model_outputs_secret, self.data_secret, metrics_dict_secret)
@@ -389,141 +760,38 @@ class DNSplatterPipeline(VanillaPipeline):
     #                 loss_dict[f"secret_{k}"] = v
                 
     #             # save edited secret image
-    #             image_save_secret = torch.cat([depth_tensor_secret, rendered_image_secret, edited_image_secret.to(self.config_secret.device), self.original_image_secret.to(self.config_secret.device)])
-    #             save_image((image_save_secret).clamp(0, 1), image_dir / f'{step}_secret_image_{self.config_secret.image_guidance_scale_ip2p_ptd}.png')
+    #             if step % 50 == 0:
+    #                 image_save_secret = torch.cat([depth_tensor_secret, rendered_image_secret, edited_image_secret.to(self.config_secret.device), self.original_image_secret.to(self.config_secret.device)])
+    #                 save_image((image_save_secret).clamp(0, 1), image_dir / f'{step}_secret_image.png')
+    #                 save_image(edited_image_secret.to(self.config_secret.device).clamp(0, 1), image_dir / f'{step}_secret_image_seva.png')
+    #     else:
+    #         # non-editing steps loss computing
+    #         camera, data = self.datamanager.next_train(step)
+    #         model_outputs = self.model(camera)
+    #         metrics_dict = self.model.get_metrics_dict(model_outputs, data)
+    #         loss_dict = self.model.get_loss_dict(model_outputs, data, metrics_dict)
 
-    #         #increment curr edit idx
-    #         # and update all the images in the dataset
-    #         self.curr_edit_idx += 1
-    #         # self.makeSquentialEdits = False
-    #         if (self.curr_edit_idx >= len(self.datamanager.cached_train)):
-    #             self.curr_edit_idx = 0
-    #             self.makeSquentialEdits = False
-    #             self.first_SequentialEdit = False
+    #         # also update the secret view w/o editing (important)
+    #         model_outputs_secret = self.model(self.camera_secret)
+    #         metrics_dict_secret = self.model.get_metrics_dict(model_outputs_secret, self.data_secret)
+    #         loss_dict_secret = self.model.get_loss_dict(model_outputs_secret, self.data_secret, metrics_dict_secret)
+
+    #         for k, v in metrics_dict_secret.items():
+    #             metrics_dict[f"secret_{k}"] = v
+    #         for k, v in loss_dict_secret.items():
+    #             loss_dict[f"secret_{k}"] = v
 
     #     return model_outputs, loss_dict, metrics_dict
         ######################################################
 
 
-    # comment this function for 1st stage updating, __update 1 image every edit rate__
-    def get_train_loss_dict(self, step: int):
-        ######################################################
-        # Secret view updating                              
-        ######################################################
-        ckpt_dir = self.trainer.checkpoint_dir
-        image_dir = ckpt_dir / "images"
-        if not image_dir.exists():
-            image_dir.mkdir(parents=True, exist_ok=True)
-
-        # print(step) # start from 30000
-
-        # the implementation of randomly selecting an index to edit instead of update all images at once
-        # generate the indexes for non-secret view editing
-        all_indices = np.arange(len(self.datamanager.cached_train))
-        allowed = all_indices[all_indices != self.config_secret.secret_view_idx]
-
-        if step % self.config_secret.edit_rate == 0:
-            #----------------non-secret view editing----------------
-            # randomly select an index to edit
-            idx = random.choice(allowed)
-            camera, data = self.datamanager.next_train_idx(idx)
-            model_outputs = self.model(camera)
-            metrics_dict = self.model.get_metrics_dict(model_outputs, data)
-
-            original_image = self.datamanager.original_cached_train[idx]["image"].unsqueeze(dim=0).permute(0, 3, 1, 2)
-            rendered_image = model_outputs["rgb"].detach().unsqueeze(dim=0).permute(0, 3, 1, 2)
-
-            depth_image = self.datamanager.original_cached_train[idx]["depth"] # [bs, h, w]
-
-            edited_image, depth_tensor = self.ip2p_depth.edit_image_depth(
-                self.text_embeddings_ip2p.to(self.config_secret.device),
-                rendered_image.to(self.dtype),
-                original_image.to(self.config_secret.device).to(self.dtype),
-                False, # is depth tensor
-                depth_image,
-                guidance_scale=self.config_secret.guidance_scale,
-                image_guidance_scale=self.config_secret.image_guidance_scale_ip2p,
-                diffusion_steps=self.config_secret.t_dec,
-                lower_bound=self.config_secret.lower_bound,
-                upper_bound=self.config_secret.upper_bound,
-            )
-
-            # resize to original image size (often not necessary)
-            if (edited_image.size() != rendered_image.size()):
-                edited_image = torch.nn.functional.interpolate(edited_image, size=rendered_image.size()[2:], mode='bilinear')
-
-            # write edited image to dataloader
-            edited_image = edited_image.to(original_image.dtype)
-            self.datamanager.cached_train[idx]["image"] = edited_image.squeeze().permute(1,2,0)
-            data["image"] = edited_image.squeeze().permute(1,2,0)
-
-            # save edited non-secret image
-            if step % 50 == 0:
-                image_save_non_secret = torch.cat([depth_tensor, rendered_image, edited_image.to(self.config_secret.device), original_image.to(self.config_secret.device)])
-                save_image((image_save_non_secret).clamp(0, 1), image_dir / f'{step}_non_secret_image_{self.config_secret.image_guidance_scale_ip2p}_edit_rate_{self.config_secret.edit_rate}.png')
-
-            loss_dict = self.model.get_loss_dict(model_outputs, data, metrics_dict)
-
-            #----------------secret view editing----------------
-            if step % 20 == 0:
-                model_outputs_secret = self.model(self.camera_secret)
-                metrics_dict_secret = self.model.get_metrics_dict(model_outputs_secret, self.data_secret)
-                loss_dict_secret = self.model.get_loss_dict(model_outputs_secret, self.data_secret, metrics_dict_secret)
-                rendered_image_secret = model_outputs_secret["rgb"].detach().unsqueeze(dim=0).permute(0, 3, 1, 2)
-                edited_image_secret, depth_tensor_secret = self.ip2p_ptd.edit_image_depth(
-                    image=rendered_image_secret.to(self.dtype), # input should be B, 3, H, W, in [0, 1]
-                    image_cond=self.original_image_secret.to(self.config_secret.device).to(self.dtype),
-                    depth=self.depth_image_secret,
-                    lower_bound=self.config_secret.lower_bound,
-                    upper_bound=self.config_secret.upper_bound
-                )
-
-                # resize to original image size (often not necessary)
-                if (edited_image_secret.size() != rendered_image_secret.size()):
-                    edited_image_secret = torch.nn.functional.interpolate(edited_image_secret, size=rendered_image_secret.size()[2:], mode='bilinear')
-
-                # write edited image to dataloader
-                edited_image_secret = edited_image_secret.to(self.original_image_secret.dtype)
-                self.datamanager.cached_train[self.config_secret.secret_view_idx]["image"] = edited_image_secret.squeeze().permute(1,2,0)
-                self.data_secret["image"] = edited_image_secret.squeeze().permute(1,2,0)
-
-                for k, v in metrics_dict_secret.items():
-                    metrics_dict[f"secret_{k}"] = v
-                for k, v in loss_dict_secret.items():
-                    loss_dict[f"secret_{k}"] = v
-                
-                # save edited secret image
-                if step % 50 == 0:
-                    image_save_secret = torch.cat([depth_tensor_secret, rendered_image_secret, edited_image_secret.to(self.config_secret.device), self.original_image_secret.to(self.config_secret.device)])
-                    save_image((image_save_secret).clamp(0, 1), image_dir / f'{step}_secret_image_{self.config_secret.image_guidance_scale_ip2p_ptd}_edit_rate_{self.config_secret.edit_rate}.png')
-        else:
-            # non-editing steps loss computing
-            camera, data = self.datamanager.next_train(step)
-            model_outputs = self.model(camera)
-            metrics_dict = self.model.get_metrics_dict(model_outputs, data)
-            loss_dict = self.model.get_loss_dict(model_outputs, data, metrics_dict)
-
-            # also update the secret view w/o editing (important)
-            model_outputs_secret = self.model(self.camera_secret)
-            metrics_dict_secret = self.model.get_metrics_dict(model_outputs_secret, self.data_secret)
-            loss_dict_secret = self.model.get_loss_dict(model_outputs_secret, self.data_secret, metrics_dict_secret)
-
-            for k, v in metrics_dict_secret.items():
-                metrics_dict[f"secret_{k}"] = v
-            for k, v in loss_dict_secret.items():
-                loss_dict[f"secret_{k}"] = v
-
-        return model_outputs, loss_dict, metrics_dict
-        ######################################################
-
-
-    # comment this function for 1st stage updating, __update all images at once__
+    # comment this function for 1st stage updating, __IGS2GS__
     # def get_train_loss_dict(self, step: int):
     #     ######################################################
     #     # Secret view updating                              
     #     ######################################################
     #     base_dir = self.trainer.base_dir
-    #     image_dir = base_dir / "images"
+    #     image_dir = base_dir / f"images_IGS2GS_secret_{self.config_secret.image_guidance_scale_ip2p_ptd}_{self.config_secret.secret_edit_rate}_non_secret_{self.config_secret.image_guidance_scale_ip2p}_{self.config_secret.edit_rate}"
     #     if not image_dir.exists():
     #         image_dir.mkdir(parents=True, exist_ok=True)
     
@@ -540,7 +808,7 @@ class DNSplatterPipeline(VanillaPipeline):
 
     #         if step % 500 == 0:
     #             rendered_image = model_outputs["rgb"].detach().unsqueeze(dim=0).permute(0, 3, 1, 2)
-    #             save_image((rendered_image).clamp(0, 1), image_dir / f'{step}_non_secret_image_{self.config_secret.image_guidance_scale_ip2p_ptd}.png')
+    #             save_image((rendered_image).clamp(0, 1), image_dir / f'{step}_non_secret_image.png')
 
     #         # also update the secret view w/o editing
     #         model_outputs_secret = self.model(self.camera_secret)
@@ -556,7 +824,7 @@ class DNSplatterPipeline(VanillaPipeline):
     #             # save the secret view image
     #             rendered_image_secret = model_outputs_secret["rgb"].detach().unsqueeze(dim=0).permute(0, 3, 1, 2)
     #             image_save_secret = torch.cat([rendered_image_secret, self.original_image_secret.to(self.config_secret.device)])
-    #             save_image((image_save_secret).clamp(0, 1), image_dir / f'{step}_secret_image_{self.config_secret.image_guidance_scale_ip2p_ptd}.png')
+    #             save_image((image_save_secret).clamp(0, 1), image_dir / f'{step}_secret_image.png')
 
     #     else:
     #         # get index
@@ -608,7 +876,7 @@ class DNSplatterPipeline(VanillaPipeline):
     #             # save edited non-secret image
     #             if step % 25 == 0:
     #                 image_save_non_secret = torch.cat([depth_tensor, rendered_image, edited_image.to(self.config_secret.device), original_image.to(self.config_secret.device)])
-    #                 save_image((image_save_non_secret).clamp(0, 1), image_dir / f'{step}_non_secret_image_{self.config_secret.image_guidance_scale_ip2p_ptd}.png')
+    #                 save_image((image_save_non_secret).clamp(0, 1), image_dir / f'{step}_non_secret_image.png')
 
     #         loss_dict = self.model.get_loss_dict(model_outputs, data, metrics_dict)
 
@@ -642,7 +910,7 @@ class DNSplatterPipeline(VanillaPipeline):
                 
     #             # save edited secret image
     #             image_save_secret = torch.cat([depth_tensor_secret, rendered_image_secret, edited_image_secret.to(self.config_secret.device), self.original_image_secret.to(self.config_secret.device)])
-    #             save_image((image_save_secret).clamp(0, 1), image_dir / f'{step}_secret_image_{self.config_secret.image_guidance_scale_ip2p_ptd}.png')
+    #             save_image((image_save_secret).clamp(0, 1), image_dir / f'{step}_secret_image.png')
 
     #         #increment curr edit idx
     #         # and update all the images in the dataset

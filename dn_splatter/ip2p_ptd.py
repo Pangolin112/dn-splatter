@@ -195,8 +195,14 @@ class IP2P_PTD(nn.Module):
         # self.ref_latent_path = 'latent_tum_white.png.pt'
         # self.ref_latent_path = 'latent_yellow_dog.jpg.pt'
 
+        # self.ref_latent_path_2 = 'latent_face1.jpg.pt'
+        self.ref_latent_path_2 = 'latent_face2.jpg.pt'
+        # self.ref_latent_path_2 = 'latent_tum_white.png.pt'
+        # self.ref_latent_path_2 = 'latent_yellow_dog.jpg.pt'
+
         self.ref_latent_init = torch.load(self.ref_latent_path).cuda().to(self.dtype)
-        self.ref_latent = self.ref_latent_init.clone()
+
+        self.ref_latent_2_init = torch.load(self.ref_latent_path_2).cuda().to(self.dtype)
 
         self.t_dec = t_dec
 
@@ -319,6 +325,7 @@ class IP2P_PTD(nn.Module):
         self,
         image: Float[Tensor, "BS 3 H W"],
         image_cond: Float[Tensor, "BS 3 H W"],
+        secret_idx: int, # the index of the secret view, 0 for first view, 1 for second view
         lower_bound: float = 0.70,
         upper_bound: float = 0.98
     ) -> torch.Tensor:
@@ -334,7 +341,10 @@ class IP2P_PTD(nn.Module):
         """
 
         # reset the ref latent to prevent reusing the results from last edition 
-        self.ref_latent = self.ref_latent_init.clone()
+        if secret_idx == 0:
+            self.ref_latent = self.ref_latent_init.clone()
+        if secret_idx == 1:
+            self.ref_latent = self.ref_latent_2_init.clone()
         # linear ref timesteps
         ref_update_steps = np.linspace(990, 0, self.t_dec)
 
@@ -548,6 +558,7 @@ class IP2P_PTD(nn.Module):
         self,
         image: Float[Tensor, "BS 3 H W"], # [0, 1]
         image_cond: Float[Tensor, "BS 3 H W"], # [0, 1]
+        secret_idx: int, # the index of the secret view, 0 for first view, 1 for second view
         depth: Float[Tensor, "BS H W"], # [0, 1], meter
         lower_bound: float = 0.70,
         upper_bound: float = 0.98
@@ -567,7 +578,10 @@ class IP2P_PTD(nn.Module):
         controlnet_cond_input = torch.cat([depth_tensor] * 3)
 
         # reset the ref latent to prevent reusing the results from last edition 
-        self.ref_latent = self.ref_latent_init.clone()
+        if secret_idx == 0:
+            self.ref_latent = self.ref_latent_init.clone()
+        if secret_idx == 1:
+            self.ref_latent = self.ref_latent_2_init.clone()
         # linear ref timesteps
         ref_update_steps = np.linspace(990, 0, self.t_dec)
 
