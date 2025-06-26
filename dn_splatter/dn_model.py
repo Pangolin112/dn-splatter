@@ -492,6 +492,10 @@ class DNSplatterModel(SplatfactoModel):
             colors_crop = torch.sigmoid(colors_crop)
             sh_degree_to_use = None
 
+            # add this to make the colors_crop to be [N, D] instead of [N, 1, D]
+            if colors_crop.dim() == 3:
+                colors_crop = colors_crop.squeeze(1)
+
         render, alpha, info = rasterization(
             means=means_crop,
             quats=quats_crop / quats_crop.norm(dim=-1, keepdim=True),
