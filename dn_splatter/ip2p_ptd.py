@@ -27,24 +27,10 @@ from torch.nn import functional as F
 from jaxtyping import Float
 import numpy as np
 from tqdm import tqdm
+import torchvision
+from PIL import Image
 
 CONSOLE = Console(width=120)
-
-def encode_prompt_with_a_prompt_and_n_prompt(batch_size, prompt, a_prompt, n_prompt, tokenizer, text_encoder, device, particle_num_vsd):
-    text_input = tokenizer(
-        [prompt + a_prompt], padding="max_length", max_length=tokenizer.model_max_length, truncation=True, return_tensors="pt"
-    )
-    with torch.no_grad():
-        text_embeddings = text_encoder(text_input.input_ids.to(device))[0]
-
-    max_length = text_input.input_ids.shape[-1]
-    uncond_input = tokenizer(
-        [n_prompt] * batch_size, padding="max_length", max_length=max_length, truncation=True, return_tensors="pt"
-    )
-    with torch.no_grad():
-        uncond_embeddings = text_encoder(uncond_input.input_ids.to(device))[0]
-
-    return torch.cat([uncond_embeddings[:particle_num_vsd], text_embeddings[:particle_num_vsd]])
 
 try:
     from diffusers import (
@@ -71,6 +57,40 @@ CLIP_SOURCE = "openai/clip-vit-large-patch14"
 IP2P_SOURCE = "timbrooks/instruct-pix2pix"
 
 CN_SOURCE = "lllyasviel/control_v11f1p_sd15_depth"
+
+
+# utils function for embedding text prompts
+def encode_prompt_with_a_prompt_and_n_prompt(batch_size, prompt, a_prompt, n_prompt, tokenizer, text_encoder, device):
+    text_input = tokenizer(
+        [prompt + a_prompt], padding="max_length", max_length=tokenizer.model_max_length, truncation=True, return_tensors="pt"
+    )
+    with torch.no_grad():
+        text_embeddings = text_encoder(text_input.input_ids.to(device))[0]
+
+    max_length = text_input.input_ids.shape[-1]
+    uncond_input = tokenizer(
+        [n_prompt] * batch_size, padding="max_length", max_length=max_length, truncation=True, return_tensors="pt"
+    )
+    with torch.no_grad():
+        uncond_embeddings = text_encoder(uncond_input.input_ids.to(device))[0]
+
+    return torch.cat([uncond_embeddings, text_embeddings])
+
+def encode_prompt_only(batch_size, prompt, tokenizer, text_encoder, device):
+    text_input = tokenizer(
+        [prompt], padding="max_length", max_length=tokenizer.model_max_length, truncation=True, return_tensors="pt"
+    )
+    with torch.no_grad():
+        text_embeddings = text_encoder(text_input.input_ids.to(device))[0]
+
+    max_length = text_input.input_ids.shape[-1]
+    uncond_input = tokenizer(
+        [""] * batch_size, padding="max_length", max_length=max_length, truncation=True, return_tensors="pt"
+    )
+    with torch.no_grad():
+        uncond_embeddings = text_encoder(uncond_input.input_ids.to(device))[0]
+
+    return torch.cat([uncond_embeddings, text_embeddings])
 
 
 @dataclass
@@ -197,37 +217,136 @@ class IP2P_PTD(nn.Module):
 
         CONSOLE.print("PTDiffusion loaded!")
 
-        # ref latent
-        # self.ref_latent_path = './outputs/latent.pt'
-        # self.ref_latent_path = './outputs/latent_face1.jpg_PTD.pt'
-        # self.ref_latent_path = './outputs/latent_face1.jpt_cond.pt' # japanese
-        # self.ref_latent_path = './outputs/latent_face1.jpg_cond.pt' # snowed 
+        # get the text embedding
+        text_embeddings = encode_prompt_with_a_prompt_and_n_prompt(self.batch_size, self.prompt, self.a_prompt, self.n_prompt, tokenizer, text_encoder, self.device)
+        # text_embeddings = encode_prompt_only(self.batch_size, self.prompt, tokenizer, text_encoder, self.device)
+        
+        self.uncond, self.cond = text_embeddings.chunk(2)
 
-        # don't use cond for DDIM inversion like above, the results are unstable
-        self.ref_latent_path = 'latent_face1.jpg.pt'
-        # self.ref_latent_path = 'latent_face2.jpg.pt'
-        # self.ref_latent_path = 'latent_tum_white.png.pt'
+        self.text_embeddings_ptd = text_embeddings
+
+        self.text_embeddings_ip2p = torch.cat([self.cond, self.uncond, self.uncond])
+
+        # directly load the ref_latents
+        # # ref latent
+        # # self.ref_latent_path = './outputs/latent.pt'
+        # # self.ref_latent_path = './outputs/latent_face1.jpg_PTD.pt'
+        # # self.ref_latent_path = './outputs/latent_face1.jpt_cond.pt' # japanese
+        # # self.ref_latent_path = './outputs/latent_face1.jpg_cond.pt' # snowed 
+
+        # # don't use cond for DDIM inversion like above, the results are unstable
+        # # self.ref_latent_path = 'latent_face1.jpg.pt'
+        # # self.ref_latent_path = 'latent_face2.jpg.pt'
+        # # self.ref_latent_path = 'latent_tum_white.png.pt'
         # self.ref_latent_path = 'latent_yellow_dog.jpg.pt'
 
+        # self.ref_latent_init = torch.load(self.ref_latent_path).cuda().to(self.dtype)
+
+        # generate the ref_latent using no a_prompt and n_prompt
+        # ref_name = "tum_white.png"
+        # ref_name = "face1.jpg"
+        ref_name = "face2.jpg"
+        # ref_name = "yellow_dog.jpg"
+
+        self.ref_img_path = f'./data/ref_images/{ref_name}'
+        self.ref_latent_path = f'./outputs/latents/latent_{ref_name}.pt'
+        self.t_enc = 1000
+        self.add_noise = False
+        self.contrast = 2
+        self.DDIM_inversion()
+
+        # second secret latent
         # self.ref_latent_path_2 = 'latent_face1.jpg.pt'
         self.ref_latent_path_2 = 'latent_face2.jpg.pt'
         # self.ref_latent_path_2 = 'latent_tum_white.png.pt'
         # self.ref_latent_path_2 = 'latent_yellow_dog.jpg.pt'
 
-        self.ref_latent_init = torch.load(self.ref_latent_path).cuda().to(self.dtype)
-
         self.ref_latent_2_init = torch.load(self.ref_latent_path_2).cuda().to(self.dtype)
 
         self.t_dec = t_dec
 
-        # get the text embedding
-        text_embeddings = encode_prompt_with_a_prompt_and_n_prompt(self.batch_size, self.prompt, self.a_prompt, self.n_prompt, tokenizer, text_encoder, self.device, particle_num_vsd=1)
-        self.uncond, self.cond = text_embeddings.chunk(2)
-        self.text_embeddings_ptd = text_embeddings
+    def load_ref_img(
+        self
+    ):
+        """Load reference image for image editing
+        Returns:
+            img_tensor: reference image tensor
+        """
+        img = Image.open(self.ref_img_path).convert('RGB').resize((self.render_size, self.render_size))
+        img = torchvision.transforms.ColorJitter(contrast=(self.contrast, self.contrast))(img)
+        img = np.array(img)
+        if len(img.shape) == 2:
+            print('Image is grayscale, stack the channels!')
+            img = np.stack([img, img, img], axis=-1)
+        img = (img.astype(np.float32) / 127.5) - 1.0           # -1 ~ 1
+        img_tensor = torch.from_numpy(img).permute(2, 0, 1)[None, ...].cuda()   # 1, 3, 512, 512
+        if self.add_noise:
+            noise = (torch.rand_like(img_tensor) - 0.5) / 0.5      # -1 ~ 1
+            img_tensor = (1 - self.noise_value) * img_tensor + self.noise_value * noise
 
-        self.text_embeddings_ip2p = torch.cat([self.cond, self.uncond, self.uncond])
+        return img_tensor.to(self.dtype)
+    
+    @torch.no_grad()
+    def encode_ddim(
+        self,
+        ref_image_tensor: torch.FloatTensor,
+    ):
+        """
+        Invert an image into the diffusion latent at timestep t_enc using a DDIM-like inversion.
 
+        Args:
+            image           : preprocessed image tensor (B x C x H x W), in [-1,1]
 
+        Returns:
+            latents: final noised latent at timestep t_enc
+        """
+        # 1. Prepare scheduler
+        scheduler = self.pipe_ptd.scheduler
+        scheduler.set_timesteps(self.t_enc, device=self.pipe_ptd.device)
+
+        # 2. Encode image through VAE once
+        # latents = self.pipe_ptd.vae.encode(image).latent_dist.sample() * self.pipe_ptd.vae.config.scaling_factor
+        h = self.pipe_ptd.vae.encoder(ref_image_tensor)
+        moments = self.pipe_ptd.vae.quant_conv(h)
+        mean, logvar = torch.chunk(moments, 2, dim=1)
+        std = torch.exp(0.5 * logvar)
+        sample = mean + std * torch.randn_like(mean)
+        latents = self.pipe_ptd.vae.config.scaling_factor * sample
+
+        # 3. Iterative inversion
+        encode_iterator = tqdm(scheduler.timesteps, desc='Encoding Image', total=self.t_enc)
+
+        alphas_cumprod = scheduler.alphas_cumprod.to(self.pipe_ptd.device)
+        for _, t in enumerate(encode_iterator):
+            # t: 1000, 999, 998, …, 1
+            noise_pred = self.pipe_ptd.unet(latents, 1000 - t, encoder_hidden_states=self.uncond).sample # 0 ~ 999 #TODO: this is wrong, we need to use uncond with "" as n_prompt
+
+            alphas = alphas_cumprod[1000 - t - 1] if 1000 - t - 1 >= 0 else alphas_cumprod[1000 - t]
+            alphas_next = alphas_cumprod[1000 - t]
+
+            xt_weighted = (alphas_next / alphas).sqrt() * latents
+            weighted_noise_pred = alphas_next.sqrt() * ((1 / alphas_next - 1).sqrt() - (1 / alphas - 1).sqrt()) * noise_pred
+                                                                
+            latents = xt_weighted + weighted_noise_pred
+
+        return latents
+
+    def DDIM_inversion(
+        self
+    ):
+        """DDIM inversion of reference image for image editing
+        Args:
+            uncond: unconditional conditioning
+        Returns:
+            inverted latents
+        """
+        # DDIM inversion of ref image
+        # should move this before the first stage, if before the second stage, the results would be different from normal results TODO: still debugging
+        img_ref_tensor = self.load_ref_img()
+        # reversion trajectory
+        self.ref_latent_init = self.encode_ddim(img_ref_tensor)
+        torch.save(self.ref_latent_init, self.ref_latent_path)
+    
     @torch.no_grad()
     def phase_substitute(
         self,
