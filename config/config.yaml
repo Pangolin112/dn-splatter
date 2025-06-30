@@ -80,9 +80,11 @@ seed: 99
 
 # prompts
 prompt_1: "a castle"
-prompt_2: "keep the image exactly the same"
+prompt_2: ""
 a_prompt: ", best quality, high quality, extremely detailed, good geometry, high-res photo"
 n_prompt: "deformed, extra digit, fewer digits, cropped, worst quality, low quality, smoke, shading, lighting, lumination, shadow, text in image, watermarks"
+# a_prompt: ""
+# n_prompt: ""
 
 # PTD
 encode_steps: 1000 # default: 1000
@@ -104,8 +106,8 @@ async_ahead_steps: 20 # default: 0, no async ahead; [-10, 10] (original PTD), th
 
 # IP2P
 t_dec: 20
-image_guidance_scale_ip2p: 2.0 # decrease the cs would create better results w depth condition
-image_guidance_scale_ip2p_ptd: 2.5 # increase the cs would make the results more similar to the input image 
+image_guidance_scale_ip2p: 1.0 # decrease the cs would create better results w depth condition
+image_guidance_scale_ip2p_ptd: 3.0 # increase the cs would make the results more similar to the input image 
 lower_bound: 0.98 # the higher the better
 upper_bound: 0.99 # the higher the better
 

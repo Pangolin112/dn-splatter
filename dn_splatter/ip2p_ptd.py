@@ -90,6 +90,8 @@ class IP2P_PTD(nn.Module):
         device: Union[torch.device, str], 
         conditioning_scale: float = 1.0,
         prompt: str = "a photo of a japanese style living room",
+        a_prompt: str = ", best quality, high quality, extremely detailed, good geometry, high-res photo",
+        n_prompt: str = "deformed, extra digit, fewer digits, cropped, worst quality, low quality, smoke, shading, lighting, lumination, shadow, text in image, watermarks",
         t_dec: int = 20, 
         num_train_timesteps: int = 1000, 
         ip2p_use_full_precision=False,
@@ -154,9 +156,9 @@ class IP2P_PTD(nn.Module):
         # PTD configs
         self.batch_size = 1
         self.prompt = prompt
-        self.a_prompt = ", best quality, high quality, extremely detailed, good geometry, high-res photo"
-        self.n_prompt = "deformed, extra digit, fewer digits, cropped, worst quality, low quality, smoke, shading, lighting, lumination, shadow, text in image, watermarks"
-        
+        self.a_prompt = a_prompt
+        self.n_prompt = n_prompt
+
         # load model
         controlnet = ControlNetModel.from_pretrained(CN_SOURCE, torch_dtype=self.dtype, low_cpu_mem_usage=True).to(self.device)
         pipe = StableDiffusionControlNetPipeline.from_pretrained(SD_SOURCE, controlnet=controlnet, torch_dtype=self.dtype, low_cpu_mem_usage=True).to(self.device)

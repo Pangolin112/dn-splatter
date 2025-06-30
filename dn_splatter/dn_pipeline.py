@@ -190,6 +190,8 @@ class DNSplatterPipeline(VanillaPipeline):
             self.dtype, 
             self.config_secret.device, 
             prompt=self.config_secret.prompt_2, 
+            a_prompt=self.config_secret.a_prompt,
+            n_prompt=self.config_secret.n_prompt,
             t_dec=self.config_secret.t_dec, 
             image_guidance_scale=self.config_secret.image_guidance_scale_ip2p_ptd, 
             async_ahead_steps=self.config_secret.async_ahead_steps
