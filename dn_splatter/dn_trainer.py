@@ -47,7 +47,7 @@ class DNTrainer(Trainer):
         ckpt_path = self.checkpoint_dir / f"step-{step:09d}.ckpt"
         # drop anything under ip2p_depth and ip2p_ptd, or the saved checkpoint will be too large
         # pipeline_state_dict = {k: v for k, v in self.pipeline.state_dict().items() if "ip2p." not in k}
-        pipeline_state_dict = {k: v for k, v in self.pipeline.state_dict().items() if not (k.startswith("ip2p_ptd.") or k.startswith("ip2p_depth."))}
+        pipeline_state_dict = {k: v for k, v in self.pipeline.state_dict().items() if not (k.startswith("ip2p_ptd.") or k.startswith("ip2p_depth.") or k.startswith("MODEL.") or k.startswith("CONDITIONER.") or k.startswith("AE.") or k.startswith("DENOISER."))}
         
         # since the optimizer for normal is just to make the trainer happy, so
         # we need to mannually add the 'step' dict into it.

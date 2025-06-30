@@ -82,7 +82,7 @@ def generate_ves_poses_opengl(c2w_secret, angle_limit_degrees=15.0):
 
     ves_c2w_list = []
 
-    # ves_c2w_list.append(c2w_secret)  # Include the original pose
+    ves_c2w_list.append(c2w_secret)  # Include the original pose
 
     for dtheta in deltas:
         for dphi in deltas:

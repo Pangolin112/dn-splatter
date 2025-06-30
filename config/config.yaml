@@ -80,7 +80,7 @@ seed: 99
 
 # prompts
 prompt_1: "a castle"
-prompt_2: "make it look like it just snowed"
+prompt_2: "keep the image exactly the same"
 a_prompt: ", best quality, high quality, extremely detailed, good geometry, high-res photo"
 n_prompt: "deformed, extra digit, fewer digits, cropped, worst quality, low quality, smoke, shading, lighting, lumination, shadow, text in image, watermarks"
 
@@ -104,8 +104,8 @@ async_ahead_steps: 20 # default: 0, no async ahead; [-10, 10] (original PTD), th
 
 # IP2P
 t_dec: 20
-image_guidance_scale_ip2p: 1.0 # decrease the cs would create better results w depth condition
-image_guidance_scale_ip2p_ptd: 1.0 # increase the cs would make the results more similar to the input image 
+image_guidance_scale_ip2p: 2.0 # decrease the cs would create better results w depth condition
+image_guidance_scale_ip2p_ptd: 2.5 # increase the cs would make the results more similar to the input image 
 lower_bound: 0.98 # the higher the better
 upper_bound: 0.99 # the higher the better
 
@@ -116,14 +116,14 @@ interpolate_scale: 1.0 # default: 1.0, no interpolation; 0.0, full interpolation
 
 secret_view_idx: 6
 secret_view_idx_2: 50
-secret_loss_weight: 5.0
+secret_loss_weight: 1.0
 secret_weight: 0.5 # default: 0.5
 secret_update_rate: 1 # default: 1, every secret_update_rate iters, update once for a secret view, every iter, update once for a non-secret view.
 
 init_flag: False # default: True, use Stage 1 and Stage 2; False, only use Stage 2
 
 # GaussTrap
-angle_limits: [3.0, 3.0] # default: [13, 15], angular perturbations list, unit: ^\circ
+angle_limits: [15.0, 3.0] # default: [13, 15], angular perturbations list, unit: ^\circ
 
 num_attack_iters: 15
 num_stabilize_iters: 5
