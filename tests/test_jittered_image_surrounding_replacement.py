@@ -55,9 +55,9 @@ render_size = 512
 contrast = 4.0
 add_noise = False
 noise_value = 0.05
-# ref_name = "tum_white.png"
+ref_name = "tum_white.png"
 # ref_name = "face1.jpg"
-ref_name = "face2.jpg"
+# ref_name = "face2.jpg"
 # ref_name = "yellow_dog.jpg"
 img = Image.open(f"data/ref_images/{ref_name}").convert('RGB').resize((render_size, render_size))
 img = torchvision.transforms.ColorJitter(contrast=(contrast, contrast))(img)
@@ -80,7 +80,7 @@ masks = masks[sorted_ind]
 scores = scores[sorted_ind]
 logits = logits[sorted_ind]
 
-# show_masks(img, masks, scores, point_coords=input_point, input_labels=input_label, borders=True)
+show_masks(img, masks, scores, point_coords=input_point, input_labels=input_label, borders=True)
 
 image_original = Image.open("data/fb5a96b1a2_original/DSC02791_original.png")
 
@@ -92,6 +92,7 @@ mask_pixel_counts = [np.sum(mask) for mask in masks]
 max_pixels_idx = np.argmax(mask_pixel_counts)
 
 # Select the mask with the most white pixels
+# mask = masks[0]
 mask = masks[max_pixels_idx]
 
 # First, ensure both images have the same size
