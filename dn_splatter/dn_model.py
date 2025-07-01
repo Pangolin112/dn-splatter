@@ -702,11 +702,11 @@ class DNSplatterModel(SplatfactoModel):
         if mono_depth_gt is not None:
             depth_gt = mono_depth_gt
 
-        if depth_gt is None and self.config.use_depth_loss:
-            CONSOLE.log(
-                "--pipeline.model.use-depth-loss is set to True but could not find depths to load. Remember to load depths in dataparser.",
-                style="bold yellow",
-            )
+        # if depth_gt is None and self.config.use_depth_loss:
+        #     CONSOLE.log(
+        #         "--pipeline.model.use-depth-loss is set to True but could not find depths to load. Remember to load depths in dataparser.",
+        #         style="bold yellow",
+        #     )
 
         if self.config.regularization_strategy == "dn-splatter":
             regularization_strategy_loss = self.regularization_strategy(
