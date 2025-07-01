@@ -29,6 +29,7 @@ import numpy as np
 from tqdm import tqdm
 import torchvision
 from PIL import Image
+from sam2.sam2_image_predictor import SAM2ImagePredictor
 
 from transformers import CLIPVisionModel, CLIPImageProcessor
 
@@ -219,18 +220,26 @@ class IP2P_PTD(nn.Module):
 
         CONSOLE.print("PTDiffusion loaded!")
 
+        # sam 2
+        # set predictor
+        self.predictor = SAM2ImagePredictor.from_pretrained("facebook/sam2.1-hiera-large")
+        self.input_point = np.array([[330, 256], [150, 256]])
+        self.input_label = np.array([1, 1])
+        CONSOLE.print("SAM2 predictor loaded!")
+
         # get the text embedding
         text_embeddings = encode_prompt_with_a_prompt_and_n_prompt(self.batch_size, self.prompt, self.a_prompt, self.n_prompt, tokenizer, text_encoder, self.device)
-        # text_embeddings = encode_prompt_only(self.batch_size, self.prompt, tokenizer, text_encoder, self.device)
+        text_embeddings_null = encode_prompt_only(self.batch_size, self.prompt, tokenizer, text_encoder, self.device)
         
         # get the image embedding
         image_encoder = CLIPVisionModel.from_pretrained(CLIP_SOURCE)
         image_processor = CLIPImageProcessor.from_pretrained(CLIP_SOURCE)
         projection = torch.nn.Linear(1024, 768).to(self.dtype)
 
-        image = Image.open("data/fb5a96b1a2_original/DSC02791_original.png")
+        # self.image_original = Image.open("data/fb5a96b1a2_original/DSC02791_original.png")
+        self.image_original = Image.open("data/49a82360aa_original/DSC00043_original.png")
 
-        inputs = image_processor(images=image, return_tensors="pt")
+        inputs = image_processor(images=self.image_original, return_tensors="pt")
         image_embeds = image_encoder(**inputs).last_hidden_state.to(self.dtype)
         conditional_embeds = projection(image_embeds)[:, :77, :]
         unconditional_embeds = torch.zeros_like(conditional_embeds)
@@ -238,14 +247,16 @@ class IP2P_PTD(nn.Module):
 
         uncond_image, cond_image = image_embeddings.chunk(2)
         uncond_text, cond_text = text_embeddings.chunk(2)
+        uncond_text_null, cond_text_null = text_embeddings_null.chunk(2)
 
         # chose to use image embeddings or text embeddings
-        self.uncond, self.cond = uncond_text, cond_text
+        # self.uncond, self.cond = uncond_image, cond_image
+        # self.uncond, self.cond = uncond_text, cond_text
+        self.uncond, self.cond = uncond_text_null, cond_text_null
 
         self.text_embeddings_ip2p = torch.cat([self.cond, self.uncond, self.uncond])
 
-
-        # directly load the ref_latents
+        # # directly load the ref_latents
         # # ref latent
         # # self.ref_latent_path = './outputs/latent.pt'
         # # self.ref_latent_path = './outputs/latent_face1.jpg_PTD.pt'
@@ -254,24 +265,24 @@ class IP2P_PTD(nn.Module):
 
         # # don't use cond for DDIM inversion like above, the results are unstable
         # # self.ref_latent_path = 'latent_face1.jpg.pt'
-        # # self.ref_latent_path = 'latent_face2.jpg.pt'
+        # self.ref_latent_path = 'latent_face2.jpg.pt'
         # # self.ref_latent_path = 'latent_tum_white.png.pt'
-        # self.ref_latent_path = 'latent_yellow_dog.jpg.pt'
+        # # self.ref_latent_path = 'latent_yellow_dog.jpg.pt'
 
         # self.ref_latent_init = torch.load(self.ref_latent_path).cuda().to(self.dtype)
 
         # generate the ref_latent using no a_prompt and n_prompt
-        # ref_name = "tum_white.png"
-        ref_name = "face1.jpg"
-        # ref_name = "face2.jpg"
-        # ref_name = "yellow_dog.jpg"
+        # self.ref_name = "tum_white.png"
+        # self.ref_name = "face1.jpg"
+        self.ref_name = "face2.jpg"
+        # self.ref_name = "yellow_dog.jpg"
 
-        self.ref_img_path = f'./data/ref_images/{ref_name}'
-        self.ref_latent_path = f'./outputs/latents/latent_{ref_name}.pt'
+        self.ref_img_path = f'./data/ref_images/{self.ref_name}'
+        self.ref_latent_path = f'./outputs/latents/latent_{self.ref_name}.pt'
         self.t_enc = 1000
         self.add_noise = False #False for normal images, True for sharp images
         self.noise_value = 0.05
-        self.contrast = 2
+        self.contrast = 2.0 # default 2.0
         self.DDIM_inversion()
 
         # second secret latent
@@ -284,6 +295,7 @@ class IP2P_PTD(nn.Module):
 
         self.t_dec = t_dec
 
+        
     def load_ref_img(
         self
     ):
@@ -293,6 +305,54 @@ class IP2P_PTD(nn.Module):
         """
         img = Image.open(self.ref_img_path).convert('RGB').resize((self.render_size, self.render_size))
         img = torchvision.transforms.ColorJitter(contrast=(self.contrast, self.contrast))(img)
+        # save Jitter image
+        img.save(f'./outputs/jittered_images/{self.ref_name}_{self.contrast}.png', 'PNG')
+        img = np.array(img)
+        if len(img.shape) == 2:
+            print('Image is grayscale, stack the channels!')
+            img = np.stack([img, img, img], axis=-1)
+        img = (img.astype(np.float32) / 127.5) - 1.0           # -1 ~ 1
+        img_tensor = torch.from_numpy(img).permute(2, 0, 1)[None, ...].cuda()   # 1, 3, 512, 512
+        if self.add_noise:
+            noise = (torch.rand_like(img_tensor) - 0.5) / 0.5      # -1 ~ 1
+            img_tensor = (1 - self.noise_value) * img_tensor + self.noise_value * noise
+
+        return img_tensor.to(self.dtype)
+    
+    def load_ref_img_and_mask(
+        self
+    ):
+        """Load reference image for image editing
+        Returns:
+            img_tensor: reference image tensor
+        """
+        img = Image.open(self.ref_img_path).convert('RGB').resize((self.render_size, self.render_size))
+        img = torchvision.transforms.ColorJitter(contrast=(self.contrast, self.contrast))(img)
+        # save Jitter image
+        img.save(f'./outputs/jittered_images/{self.ref_name}_{self.contrast}.png', 'PNG')
+
+        with torch.inference_mode(), torch.autocast("cuda", dtype=torch.bfloat16):
+            self.predictor.set_image(img)
+            masks, scores, logits = self.predictor.predict(
+                point_coords=self.input_point,
+                point_labels=self.input_label,
+                multimask_output=True,
+            )
+
+        mask_pixel_counts = [np.sum(mask) for mask in masks]
+        max_pixels_idx = np.argmax(mask_pixel_counts)
+        mask = masks[max_pixels_idx]
+        img_array = np.array(img)
+        image_original_array = np.array(self.image_original)
+        mask_3d = np.stack([mask] * 3, axis=-1)
+        composite_image = np.where(mask_3d, img_array, image_original_array)
+        result_image = Image.fromarray(composite_image.astype(np.uint8))
+
+        img = result_image
+        img.save(f'./outputs/jittered_images/{self.ref_name}_{self.contrast}_composite.png', 'PNG')
+
+        torch.cuda.empty_cache()
+
         img = np.array(img)
         if len(img.shape) == 2:
             print('Image is grayscale, stack the channels!')
@@ -361,7 +421,9 @@ class IP2P_PTD(nn.Module):
         """
         # DDIM inversion of ref image
         # should move this before the first stage, if before the second stage, the results would be different from normal results TODO: still debugging
-        img_ref_tensor = self.load_ref_img()
+        # img_ref_tensor = self.load_ref_img()
+        img_ref_tensor = self.load_ref_img_and_mask() # use mask to replace the background
+
         # reversion trajectory
         self.ref_latent_init = self.encode_ddim(img_ref_tensor)
         torch.save(self.ref_latent_init, self.ref_latent_path)

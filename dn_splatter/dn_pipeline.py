@@ -230,72 +230,72 @@ class DNSplatterPipeline(VanillaPipeline):
             angle_limit_degrees=self.config_secret.angle_limits[0]
         )
 
-        # Define VES view indices - these will be appended after existing training views
-        self.num_ves_views = len(self.ves_c2ws)  # Should be 9 based on your code
-        original_train_size = len(self.datamanager.cached_train)
-        self.ves_view_indices = list(range(original_train_size, original_train_size + self.num_ves_views))
+        # # Define VES view indices - these will be appended after existing training views
+        # self.num_ves_views = len(self.ves_c2ws)  # Should be 9 based on your code
+        # original_train_size = len(self.datamanager.cached_train)
+        # self.ves_view_indices = list(range(original_train_size, original_train_size + self.num_ves_views))
         
-        # Extend cached_train to accommodate VES views
-        # Create placeholder entries for VES views
-        for i in range(self.num_ves_views):
-            # Create a placeholder data entry with the same structure as existing entries
-            # You may need to adjust this based on your actual data structure
-            placeholder_entry = {
-                "image": torch.zeros_like(self.datamanager.cached_train[0]["image"]),  # Placeholder image
-                "idx": original_train_size + i,
-                "is_ves_view": True,  # Flag to identify VES views
-            }
+        # # Extend cached_train to accommodate VES views
+        # # Create placeholder entries for VES views
+        # for i in range(self.num_ves_views):
+        #     # Create a placeholder data entry with the same structure as existing entries
+        #     # You may need to adjust this based on your actual data structure
+        #     placeholder_entry = {
+        #         "image": torch.zeros_like(self.datamanager.cached_train[0]["image"]),  # Placeholder image
+        #         "idx": original_train_size + i,
+        #         "is_ves_view": True,  # Flag to identify VES views
+        #     }
             
-            # Add other required fields from your data structure but set depth/normal to None for VES views
-            if "depth" in self.datamanager.cached_train[0]:
-                placeholder_entry["depth"] = None  # Set to None instead of zeros
+        #     # Add other required fields from your data structure but set depth/normal to None for VES views
+        #     if "depth" in self.datamanager.cached_train[0]:
+        #         placeholder_entry["depth"] = None  # Set to None instead of zeros
             
-            if "sensor_depth" in self.datamanager.cached_train[0]:
-                placeholder_entry["sensor_depth"] = None
+        #     if "sensor_depth" in self.datamanager.cached_train[0]:
+        #         placeholder_entry["sensor_depth"] = None
                 
-            if "mono_depth" in self.datamanager.cached_train[0]:
-                placeholder_entry["mono_depth"] = None
+        #     if "mono_depth" in self.datamanager.cached_train[0]:
+        #         placeholder_entry["mono_depth"] = None
                 
-            if "normal" in self.datamanager.cached_train[0]:
-                placeholder_entry["normal"] = None
+        #     if "normal" in self.datamanager.cached_train[0]:
+        #         placeholder_entry["normal"] = None
                 
-            if "confidence" in self.datamanager.cached_train[0]:
-                placeholder_entry["confidence"] = None
+        #     if "confidence" in self.datamanager.cached_train[0]:
+        #         placeholder_entry["confidence"] = None
             
-            # Add any other fields that exist in your cached_train entries
-            for key in self.datamanager.cached_train[0].keys():
-                if key not in placeholder_entry:
-                    if key in ["depth", "sensor_depth", "mono_depth", "normal", "confidence"]:
-                        placeholder_entry[key] = None
-                    elif isinstance(self.datamanager.cached_train[0][key], torch.Tensor):
-                        placeholder_entry[key] = torch.zeros_like(self.datamanager.cached_train[0][key])
-                    else:
-                        placeholder_entry[key] = self.datamanager.cached_train[0][key]  # Copy non-tensor values
+        #     # Add any other fields that exist in your cached_train entries
+        #     for key in self.datamanager.cached_train[0].keys():
+        #         if key not in placeholder_entry:
+        #             if key in ["depth", "sensor_depth", "mono_depth", "normal", "confidence"]:
+        #                 placeholder_entry[key] = None
+        #             elif isinstance(self.datamanager.cached_train[0][key], torch.Tensor):
+        #                 placeholder_entry[key] = torch.zeros_like(self.datamanager.cached_train[0][key])
+        #             else:
+        #                 placeholder_entry[key] = self.datamanager.cached_train[0][key]  # Copy non-tensor values
             
-            self.datamanager.cached_train.append(placeholder_entry)
+        #     self.datamanager.cached_train.append(placeholder_entry)
         
-        # Also extend original_cached_train if it exists
-        if hasattr(self.datamanager, 'original_cached_train'):
-            for i in range(self.num_ves_views):
-                placeholder_entry = {
-                    "image": torch.zeros_like(self.datamanager.original_cached_train[0]["image"]),
-                    "idx": original_train_size + i,
-                    "is_ves_view": True,
-                }
+        # # Also extend original_cached_train if it exists
+        # if hasattr(self.datamanager, 'original_cached_train'):
+        #     for i in range(self.num_ves_views):
+        #         placeholder_entry = {
+        #             "image": torch.zeros_like(self.datamanager.original_cached_train[0]["image"]),
+        #             "idx": original_train_size + i,
+        #             "is_ves_view": True,
+        #         }
                 
-                if "depth" in self.datamanager.original_cached_train[0]:
-                    placeholder_entry["depth"] = None
+        #         if "depth" in self.datamanager.original_cached_train[0]:
+        #             placeholder_entry["depth"] = None
                 
-                for key in self.datamanager.original_cached_train[0].keys():
-                    if key not in placeholder_entry:
-                        if key in ["depth", "sensor_depth", "mono_depth", "normal", "confidence"]:
-                            placeholder_entry[key] = None
-                        elif isinstance(self.datamanager.original_cached_train[0][key], torch.Tensor):
-                            placeholder_entry[key] = torch.zeros_like(self.datamanager.original_cached_train[0][key])
-                        else:
-                            placeholder_entry[key] = self.datamanager.original_cached_train[0][key]
+        #         for key in self.datamanager.original_cached_train[0].keys():
+        #             if key not in placeholder_entry:
+        #                 if key in ["depth", "sensor_depth", "mono_depth", "normal", "confidence"]:
+        #                     placeholder_entry[key] = None
+        #                 elif isinstance(self.datamanager.original_cached_train[0][key], torch.Tensor):
+        #                     placeholder_entry[key] = torch.zeros_like(self.datamanager.original_cached_train[0][key])
+        #                 else:
+        #                     placeholder_entry[key] = self.datamanager.original_cached_train[0][key]
                 
-                self.datamanager.original_cached_train.append(placeholder_entry)
+        #         self.datamanager.original_cached_train.append(placeholder_entry)
 
         # generate ves cameras
         self.ves_cameras = []
@@ -416,13 +416,13 @@ class DNSplatterPipeline(VanillaPipeline):
         # now return whatever callbacks the base class wants
         return super().get_training_callbacks(attrs)
     
-    # seva + only secret
+    # only secret
     def get_train_loss_dict(self, step: int):
         ######################################################
         # Secret view updating                              
         ######################################################
         base_dir = self.trainer.base_dir
-        image_dir = base_dir / f"images_seva_secret_{self.config_secret.image_guidance_scale_ip2p_ptd}_{self.config_secret.secret_edit_rate}_non_secret_{self.config_secret.image_guidance_scale_ip2p}_{self.config_secret.edit_rate}"
+        image_dir = base_dir / f"images_only_secret_{self.config_secret.image_guidance_scale_ip2p_ptd}_{self.config_secret.secret_edit_rate}_non_secret_{self.config_secret.image_guidance_scale_ip2p}_{self.config_secret.edit_rate}"
         if not image_dir.exists():
             image_dir.mkdir(parents=True, exist_ok=True)
 
@@ -438,9 +438,7 @@ class DNSplatterPipeline(VanillaPipeline):
         loss_dict_secret = self.model.get_loss_dict(model_outputs_secret, self.data_secret, metrics_dict_secret)
 
         #----------------secret view editing----------------
-        if step % self.config_secret.secret_edit_rate == 0 or self.first_iter:
-            self.first_iter = False
-
+        if step % self.config_secret.secret_edit_rate == 0:
             rendered_image_secret = model_outputs_secret["rgb"].detach().unsqueeze(dim=0).permute(0, 3, 1, 2)
             edited_image_secret, depth_tensor_secret = self.ip2p_ptd.edit_image_depth(
                 image=rendered_image_secret.to(self.dtype), # input should be B, 3, H, W, in [0, 1]
@@ -461,140 +459,9 @@ class DNSplatterPipeline(VanillaPipeline):
             self.data_secret["image"] = edited_image_secret.squeeze().permute(1,2,0)
             
             # save edited secret image
-            # generate ves views
-            rgb_list = []
-            for ves_camera in self.ves_cameras:
-                model_outputs_ves = self.model(ves_camera)
-                rendered_image_ves = model_outputs_ves["rgb"].detach().unsqueeze(dim=0).permute(0, 3, 1, 2) # [1, 3, H, W]
-                rgb_list.append(rendered_image_ves.cpu().squeeze())
-
-            row1 = torch.cat([rgb_list[8], rgb_list[7], rgb_list[6]], dim=2)
-            row2 = torch.cat([rgb_list[5], rgb_list[0], rgb_list[4]], dim=2)
-            row3 = torch.cat([rgb_list[3], rgb_list[2], rgb_list[1]], dim=2)  # concat along W
-
-            # Now stack the three rows along H to get a single [3, 3H, 3W] image
-            img = torch.cat([row1, row2, row3], dim=1)  # concat along H
-
-            save_image(img.clamp(0, 1), image_dir / f'{step}_ves_image.png')
-
-            # save secret images
             image_save_secret = torch.cat([depth_tensor_secret, rendered_image_secret, edited_image_secret.to(self.config_secret.device), self.original_image_secret.to(self.config_secret.device)])
             save_image((image_save_secret).clamp(0, 1), image_dir / f'{step}_secret_list.png')
             save_image((edited_image_secret.to(self.config_secret.device)).clamp(0, 1), image_dir / f'{step}_secret_image.png')
-
-            # seva results
-            all_imgs_path = [str(image_dir / f'{step}_secret_image.png')] + [None] * self.num_targets
-
-            print(all_imgs_path)
-
-            # Create image conditioning.
-            image_cond = {
-                "img": all_imgs_path,
-                "input_indices": self.input_indices,
-                "prior_indices": self.anchor_indices,
-            }
-            # Create camera conditioning.
-            camera_cond = {
-                "c2w": self.seva_c2ws.clone(),
-                "K": self.Ks.clone(),
-                "input_indices": list(range(self.num_inputs + self.num_targets)),
-            }
-
-            # run_one_scene -> transform_img_and_K modifies VERSION_DICT["H"] and VERSION_DICT["W"] in-place.
-            video_path_generator = run_one_scene(
-                self.task,
-                self.VERSION_DICT,  # H, W maybe updated in run_one_scene
-                model=self.MODEL,
-                ae=self.AE,
-                conditioner=self.CONDITIONER,
-                denoiser=self.DENOISER,
-                image_cond=image_cond,
-                camera_cond=camera_cond,
-                save_path=image_dir / f'{step}_seva',
-                use_traj_prior=True,
-                traj_prior_Ks=self.anchor_Ks,
-                traj_prior_c2ws=self.anchor_c2ws,
-                seed=self.seed,
-            )
-            for _ in video_path_generator:
-                pass
-
-            # load seva images
-            # images in 00x.png 's format under image_dir / samples-rgb / f'{step}_seva' folder
-            self.rgb_list_seva = []
-            for i in range(self.num_targets + 1):
-                image_path = image_dir / f'{step}_seva/samples-rgb/00{i}.png'
-                image = Image.open(image_path).convert('RGB')
-                transform = transforms.ToTensor()  # Converts PIL to [C, H, W] and [0, 1]
-                rgb_tensor = transform(image)
-                self.rgb_list_seva.append(rgb_tensor)
-
-            row1 = torch.cat([self.rgb_list_seva[8], self.rgb_list_seva[7], self.rgb_list_seva[6]], dim=2)
-            row2 = torch.cat([self.rgb_list_seva[5], self.rgb_list_seva[0], self.rgb_list_seva[4]], dim=2)
-            row3 = torch.cat([self.rgb_list_seva[3], self.rgb_list_seva[2], self.rgb_list_seva[1]], dim=2)  # concat along W
-
-            # Now stack the three rows along H to get a single [3, 3H, 3W] image
-            img = torch.cat([row1, row2, row3], dim=1)  # concat along H
-
-            save_image(img.clamp(0, 1), image_dir / f'{step}_ves_seva_image.png')
-
-            # Add SEVA images to dataloader
-            # Update cached_train and create data entries for each SEVA view
-            for i, (seva_image, ves_camera) in enumerate(zip(self.rgb_list_seva, self.ves_cameras)):
-                # Convert from [C, H, W] to [H, W, C] for dataloader format
-                seva_image_hwc = seva_image.permute(1, 2, 0).to(self.config_secret.device).to(self.original_image_secret.dtype)
-                
-                # Get the corresponding VES view index from predefined indices
-                view_idx = self.ves_view_indices[i]
-                
-                # Update cached_train with SEVA image
-                self.datamanager.cached_train[view_idx]["image"] = seva_image_hwc
-                    
-        # also update seva views in normal steps
-        for i, (seva_image, ves_camera) in enumerate(zip(self.rgb_list_seva, self.ves_cameras)):
-            # Convert from [C, H, W] to [H, W, C] for dataloader format
-            seva_image_hwc = seva_image.permute(1, 2, 0).to(self.config_secret.device).to(self.original_image_secret.dtype)
-            
-            # Get the corresponding VES view index from predefined indices
-            view_idx = self.ves_view_indices[i]
-
-            # Create data dict for this SEVA view for loss computation
-            data_seva = {
-                "image": seva_image_hwc,
-                "idx": view_idx,
-                "is_ves_view": True,  # Flag to identify VES views
-            }
-
-            # Get model outputs for this SEVA view
-            model_outputs_seva = self.model(ves_camera)
-            
-            # Compute metrics and loss for this SEVA view
-            # Note: We're only computing image-based losses, not depth/normal losses
-            metrics_dict_seva = self.model.get_metrics_dict(model_outputs_seva, data_seva)
-            
-            # Create a custom loss dict that only includes image-based losses
-            loss_dict_seva = {}
-            
-            # Only compute image-based losses for VES views
-            if "rgb_loss" in self.model.get_loss_dict(model_outputs_seva, data_seva, metrics_dict_seva):
-                # Get the full loss dict first
-                full_loss_dict = self.model.get_loss_dict(model_outputs_seva, data_seva, metrics_dict_seva)
-                
-                # Filter to only include image-based losses (skip depth/normal losses)
-                for k, v in full_loss_dict.items():
-                    if any(term in k.lower() for term in ["rgb", "image", "psnr", "ssim", "lpips"]):
-                        loss_dict_seva[k] = v
-            else:
-                # If the model doesn't separate losses, compute a simple L2 loss
-                rgb_pred = model_outputs_seva["rgb"]
-                rgb_gt = data_seva["image"]
-                loss_dict_seva["rgb_loss"] = torch.nn.functional.mse_loss(rgb_pred, rgb_gt)
-            
-            # Add to main dicts with unique keys
-            for k, v in metrics_dict_seva.items():
-                metrics_dict[f"seva_view_{i}_{k}"] = v
-            for k, v in loss_dict_seva.items():
-                loss_dict[f"seva_view_{i}_{k}"] = v
 
         # put the secret metrics and loss into the main dict
         for k, v in metrics_dict_secret.items():
@@ -602,7 +469,198 @@ class DNSplatterPipeline(VanillaPipeline):
         for k, v in loss_dict_secret.items():
             loss_dict[f"secret_{k}"] = v
 
+        torch.cuda.empty_cache()
+
         return model_outputs, loss_dict, metrics_dict
+        ######################################################
+
+    # seva + only secret
+    # def get_train_loss_dict(self, step: int):
+    #     ######################################################
+    #     # Secret view updating                              
+    #     ######################################################
+    #     base_dir = self.trainer.base_dir
+    #     image_dir = base_dir / f"images_seva_secret_{self.config_secret.image_guidance_scale_ip2p_ptd}_{self.config_secret.secret_edit_rate}_non_secret_{self.config_secret.image_guidance_scale_ip2p}_{self.config_secret.edit_rate}"
+    #     if not image_dir.exists():
+    #         image_dir.mkdir(parents=True, exist_ok=True)
+
+    #     # non-editing steps loss computing
+    #     camera, data = self.datamanager.next_train(step)
+    #     model_outputs = self.model(camera)
+    #     metrics_dict = self.model.get_metrics_dict(model_outputs, data)
+    #     loss_dict = self.model.get_loss_dict(model_outputs, data, metrics_dict)
+
+    #     # update the secret view w/o editing (important)
+    #     model_outputs_secret = self.model(self.camera_secret)
+    #     metrics_dict_secret = self.model.get_metrics_dict(model_outputs_secret, self.data_secret)
+    #     loss_dict_secret = self.model.get_loss_dict(model_outputs_secret, self.data_secret, metrics_dict_secret)
+
+    #     #----------------secret view editing----------------
+    #     if step % self.config_secret.secret_edit_rate == 0 or self.first_iter:
+    #         self.first_iter = False
+
+    #         rendered_image_secret = model_outputs_secret["rgb"].detach().unsqueeze(dim=0).permute(0, 3, 1, 2)
+    #         edited_image_secret, depth_tensor_secret = self.ip2p_ptd.edit_image_depth(
+    #             image=rendered_image_secret.to(self.dtype), # input should be B, 3, H, W, in [0, 1]
+    #             image_cond=self.original_image_secret.to(self.config_secret.device).to(self.dtype),
+    #             secret_idx=0,
+    #             depth=self.depth_image_secret,
+    #             lower_bound=self.config_secret.lower_bound,
+    #             upper_bound=self.config_secret.upper_bound
+    #         )
+
+    #         # resize to original image size (often not necessary)
+    #         if (edited_image_secret.size() != rendered_image_secret.size()):
+    #             edited_image_secret = torch.nn.functional.interpolate(edited_image_secret, size=rendered_image_secret.size()[2:], mode='bilinear')
+
+    #         # write edited image to dataloader
+    #         edited_image_secret = edited_image_secret.to(self.original_image_secret.dtype)
+    #         self.datamanager.cached_train[self.config_secret.secret_view_idx]["image"] = edited_image_secret.squeeze().permute(1,2,0)
+    #         self.data_secret["image"] = edited_image_secret.squeeze().permute(1,2,0)
+            
+    #         # save edited secret image
+    #         # generate ves views
+    #         rgb_list = []
+    #         for ves_camera in self.ves_cameras:
+    #             model_outputs_ves = self.model(ves_camera)
+    #             rendered_image_ves = model_outputs_ves["rgb"].detach().unsqueeze(dim=0).permute(0, 3, 1, 2) # [1, 3, H, W]
+    #             rgb_list.append(rendered_image_ves.cpu().squeeze())
+
+    #         row1 = torch.cat([rgb_list[8], rgb_list[7], rgb_list[6]], dim=2)
+    #         row2 = torch.cat([rgb_list[5], rgb_list[0], rgb_list[4]], dim=2)
+    #         row3 = torch.cat([rgb_list[3], rgb_list[2], rgb_list[1]], dim=2)  # concat along W
+
+    #         # Now stack the three rows along H to get a single [3, 3H, 3W] image
+    #         img = torch.cat([row1, row2, row3], dim=1)  # concat along H
+
+    #         save_image(img.clamp(0, 1), image_dir / f'{step}_ves_image.png')
+
+    #         # save secret images
+    #         image_save_secret = torch.cat([depth_tensor_secret, rendered_image_secret, edited_image_secret.to(self.config_secret.device), self.original_image_secret.to(self.config_secret.device)])
+    #         save_image((image_save_secret).clamp(0, 1), image_dir / f'{step}_secret_list.png')
+    #         save_image((edited_image_secret.to(self.config_secret.device)).clamp(0, 1), image_dir / f'{step}_secret_image.png')
+
+    #         # seva results
+    #         all_imgs_path = [str(image_dir / f'{step}_secret_image.png')] + [None] * self.num_targets
+
+    #         print(all_imgs_path)
+
+    #         # Create image conditioning.
+    #         image_cond = {
+    #             "img": all_imgs_path,
+    #             "input_indices": self.input_indices,
+    #             "prior_indices": self.anchor_indices,
+    #         }
+    #         # Create camera conditioning.
+    #         camera_cond = {
+    #             "c2w": self.seva_c2ws.clone(),
+    #             "K": self.Ks.clone(),
+    #             "input_indices": list(range(self.num_inputs + self.num_targets)),
+    #         }
+
+    #         # run_one_scene -> transform_img_and_K modifies VERSION_DICT["H"] and VERSION_DICT["W"] in-place.
+    #         video_path_generator = run_one_scene(
+    #             self.task,
+    #             self.VERSION_DICT,  # H, W maybe updated in run_one_scene
+    #             model=self.MODEL,
+    #             ae=self.AE,
+    #             conditioner=self.CONDITIONER,
+    #             denoiser=self.DENOISER,
+    #             image_cond=image_cond,
+    #             camera_cond=camera_cond,
+    #             save_path=image_dir / f'{step}_seva',
+    #             use_traj_prior=True,
+    #             traj_prior_Ks=self.anchor_Ks,
+    #             traj_prior_c2ws=self.anchor_c2ws,
+    #             seed=self.seed,
+    #         )
+    #         for _ in video_path_generator:
+    #             pass
+
+    #         # load seva images
+    #         # images in 00x.png 's format under image_dir / samples-rgb / f'{step}_seva' folder
+    #         self.rgb_list_seva = []
+    #         for i in range(self.num_targets + 1):
+    #             image_path = image_dir / f'{step}_seva/samples-rgb/00{i}.png'
+    #             image = Image.open(image_path).convert('RGB')
+    #             transform = transforms.ToTensor()  # Converts PIL to [C, H, W] and [0, 1]
+    #             rgb_tensor = transform(image)
+    #             self.rgb_list_seva.append(rgb_tensor)
+
+    #         row1 = torch.cat([self.rgb_list_seva[8], self.rgb_list_seva[7], self.rgb_list_seva[6]], dim=2)
+    #         row2 = torch.cat([self.rgb_list_seva[5], self.rgb_list_seva[0], self.rgb_list_seva[4]], dim=2)
+    #         row3 = torch.cat([self.rgb_list_seva[3], self.rgb_list_seva[2], self.rgb_list_seva[1]], dim=2)  # concat along W
+
+    #         # Now stack the three rows along H to get a single [3, 3H, 3W] image
+    #         img = torch.cat([row1, row2, row3], dim=1)  # concat along H
+
+    #         save_image(img.clamp(0, 1), image_dir / f'{step}_ves_seva_image.png')
+
+    #         # Add SEVA images to dataloader
+    #         # Update cached_train and create data entries for each SEVA view
+    #         for i, (seva_image, ves_camera) in enumerate(zip(self.rgb_list_seva, self.ves_cameras)):
+    #             # Convert from [C, H, W] to [H, W, C] for dataloader format
+    #             seva_image_hwc = seva_image.permute(1, 2, 0).to(self.config_secret.device).to(self.original_image_secret.dtype)
+                
+    #             # Get the corresponding VES view index from predefined indices
+    #             view_idx = self.ves_view_indices[i]
+                
+    #             # Update cached_train with SEVA image
+    #             self.datamanager.cached_train[view_idx]["image"] = seva_image_hwc
+                    
+    #     # also update seva views in normal steps
+    #     for i, (seva_image, ves_camera) in enumerate(zip(self.rgb_list_seva, self.ves_cameras)):
+    #         # Convert from [C, H, W] to [H, W, C] for dataloader format
+    #         seva_image_hwc = seva_image.permute(1, 2, 0).to(self.config_secret.device).to(self.original_image_secret.dtype)
+            
+    #         # Get the corresponding VES view index from predefined indices
+    #         view_idx = self.ves_view_indices[i]
+
+    #         # Create data dict for this SEVA view for loss computation
+    #         data_seva = {
+    #             "image": seva_image_hwc,
+    #             "idx": view_idx,
+    #             "is_ves_view": True,  # Flag to identify VES views
+    #         }
+
+    #         # Get model outputs for this SEVA view
+    #         model_outputs_seva = self.model(ves_camera)
+            
+    #         # Compute metrics and loss for this SEVA view
+    #         # Note: We're only computing image-based losses, not depth/normal losses
+    #         metrics_dict_seva = self.model.get_metrics_dict(model_outputs_seva, data_seva)
+            
+    #         # Create a custom loss dict that only includes image-based losses
+    #         loss_dict_seva = {}
+            
+    #         # Only compute image-based losses for VES views
+    #         if "rgb_loss" in self.model.get_loss_dict(model_outputs_seva, data_seva, metrics_dict_seva):
+    #             # Get the full loss dict first
+    #             full_loss_dict = self.model.get_loss_dict(model_outputs_seva, data_seva, metrics_dict_seva)
+                
+    #             # Filter to only include image-based losses (skip depth/normal losses)
+    #             for k, v in full_loss_dict.items():
+    #                 if any(term in k.lower() for term in ["rgb", "image", "psnr", "ssim", "lpips"]):
+    #                     loss_dict_seva[k] = v
+    #         else:
+    #             # If the model doesn't separate losses, compute a simple L2 loss
+    #             rgb_pred = model_outputs_seva["rgb"]
+    #             rgb_gt = data_seva["image"]
+    #             loss_dict_seva["rgb_loss"] = torch.nn.functional.mse_loss(rgb_pred, rgb_gt)
+            
+    #         # Add to main dicts with unique keys
+    #         for k, v in metrics_dict_seva.items():
+    #             metrics_dict[f"seva_view_{i}_{k}"] = v
+    #         for k, v in loss_dict_seva.items():
+    #             loss_dict[f"seva_view_{i}_{k}"] = v
+
+    #     # put the secret metrics and loss into the main dict
+    #     for k, v in metrics_dict_secret.items():
+    #         metrics_dict[f"secret_{k}"] = v
+    #     for k, v in loss_dict_secret.items():
+    #         loss_dict[f"secret_{k}"] = v
+
+    #     return model_outputs, loss_dict, metrics_dict
         ######################################################
 
     # comment this function for 1st stage updating, __IGS2GS + IN2N__seva__
