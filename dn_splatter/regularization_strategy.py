@@ -158,6 +158,9 @@ class DNRegularization(RegularizationStrategy):
     def get_depth_loss(self, pred_depth, gt_depth, **kwargs):
         """Depth loss"""
 
+        if gt_depth is None or pred_depth is None:
+            return torch.tensor(0.0, device=self.device)
+
         valid_gt_mask = gt_depth > self.depth_tolerance
         if self.depth_loss_type == DepthLossType.EdgeAwareLogL1:
             gt_img = kwargs["gt_img"]
@@ -186,6 +189,9 @@ class DNRegularization(RegularizationStrategy):
         return depth_loss
 
     def get_normal_loss(self, pred_normal, gt_normal, **kwargs):
+        if gt_normal is None or pred_normal is None:
+            return torch.tensor(0.0, device=self.device)
+
         """Normal loss and normal smoothing"""
         normal_loss = self.normal_loss(pred_normal, gt_normal)
         normal_loss += self.normal_smooth_loss(pred_normal)

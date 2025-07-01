@@ -30,6 +30,8 @@ from tqdm import tqdm
 import torchvision
 from PIL import Image
 
+from transformers import CLIPVisionModel, CLIPImageProcessor
+
 CONSOLE = Console(width=120)
 
 try:
@@ -221,11 +223,27 @@ class IP2P_PTD(nn.Module):
         text_embeddings = encode_prompt_with_a_prompt_and_n_prompt(self.batch_size, self.prompt, self.a_prompt, self.n_prompt, tokenizer, text_encoder, self.device)
         # text_embeddings = encode_prompt_only(self.batch_size, self.prompt, tokenizer, text_encoder, self.device)
         
-        self.uncond, self.cond = text_embeddings.chunk(2)
+        # get the image embedding
+        image_encoder = CLIPVisionModel.from_pretrained(CLIP_SOURCE)
+        image_processor = CLIPImageProcessor.from_pretrained(CLIP_SOURCE)
+        projection = torch.nn.Linear(1024, 768).to(self.dtype)
 
-        self.text_embeddings_ptd = text_embeddings
+        image = Image.open("data/fb5a96b1a2_original/DSC02791_original.png")
+
+        inputs = image_processor(images=image, return_tensors="pt")
+        image_embeds = image_encoder(**inputs).last_hidden_state.to(self.dtype)
+        conditional_embeds = projection(image_embeds)[:, :77, :]
+        unconditional_embeds = torch.zeros_like(conditional_embeds)
+        image_embeddings = torch.cat([unconditional_embeds, conditional_embeds]).to(self.device)
+
+        uncond_image, cond_image = image_embeddings.chunk(2)
+        uncond_text, cond_text = text_embeddings.chunk(2)
+
+        # chose to use image embeddings or text embeddings
+        self.uncond, self.cond = uncond_text, cond_text
 
         self.text_embeddings_ip2p = torch.cat([self.cond, self.uncond, self.uncond])
+
 
         # directly load the ref_latents
         # # ref latent
@@ -244,14 +262,15 @@ class IP2P_PTD(nn.Module):
 
         # generate the ref_latent using no a_prompt and n_prompt
         # ref_name = "tum_white.png"
-        # ref_name = "face1.jpg"
-        ref_name = "face2.jpg"
+        ref_name = "face1.jpg"
+        # ref_name = "face2.jpg"
         # ref_name = "yellow_dog.jpg"
 
         self.ref_img_path = f'./data/ref_images/{ref_name}'
         self.ref_latent_path = f'./outputs/latents/latent_{ref_name}.pt'
         self.t_enc = 1000
-        self.add_noise = False
+        self.add_noise = False #False for normal images, True for sharp images
+        self.noise_value = 0.05
         self.contrast = 2
         self.DDIM_inversion()
 
