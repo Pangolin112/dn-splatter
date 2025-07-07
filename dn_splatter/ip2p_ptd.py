@@ -31,7 +31,8 @@ import torchvision
 from PIL import Image
 from sam2.sam2_image_predictor import SAM2ImagePredictor
 
-from transformers import CLIPVisionModel, CLIPImageProcessor, CLIPVisionModelWithProjection
+from transformers import AutoProcessor, AutoTokenizer, CLIPModel, CLIPVisionModel, CLIPImageProcessor, CLIPVisionModelWithProjection
+from torchvision.transforms import Compose, Resize, CenterCrop, ToTensor, Normalize
 from safetensors.torch import load_file
 
 CONSOLE = Console(width=120)
@@ -96,6 +97,74 @@ def encode_prompt_only(batch_size, prompt, tokenizer, text_encoder, device):
 
     return torch.cat([uncond_embeddings, text_embeddings])
 
+def encode_image(image_original, dtype, device):
+    # First option
+    # # get the image embedding
+    # image_encoder = CLIPVisionModel.from_pretrained(CLIP_SOURCE)
+    # image_processor = CLIPImageProcessor.from_pretrained(CLIP_SOURCE)
+    # projection = torch.nn.Linear(1024, 768).to(dtype)
+    # # projection = torch.nn.Linear(1024, 768 * 4).to(self.dtype)
+
+    # # # Load IP-Adapter weights
+    # # ip_adapter_path = "ip_adapter/ip-adapter_sd15.safetensors"
+    # # ip_adapter_state_dict = load_file(ip_adapter_path)
+
+    # # projection.load_state_dict({
+    # #     "weight": ip_adapter_state_dict["image_proj.proj.weight"],
+    # #     "bias": ip_adapter_state_dict["image_proj.proj.bias"]
+    # # })
+
+    # inputs = image_processor(images=image_original, return_tensors="pt")
+    # image_embeds = image_encoder(**inputs).last_hidden_state.to(dtype) # [1, 257, 1024]
+    # conditional_embeds = projection(image_embeds) # [1, 257, 768]
+    # # image_proj = projection(image_embeds)
+    # # image_proj = image_proj.reshape(image_proj.shape[0], image_proj.shape[1], 4, 768)
+    # # cls_embed = image_proj[:, 0, :, :]
+    # # # conditional_embeds = cls_embed
+
+    # unconditional_embeds = torch.zeros_like(conditional_embeds)
+    # image_embeddings = torch.cat([unconditional_embeds, image_embeds]).to(device)
+
+    # second option (use this)
+    # ref: https://huggingface.co/openai/clip-vit-large-patch14/discussions/1
+    _model = CLIPModel.from_pretrained(CLIP_SOURCE)
+    image_processor = Compose([
+        Resize(size=224, interpolation=Image.BICUBIC),
+        CenterCrop(size=(224, 224)),
+        lambda img: img.convert('RGB'),
+        ToTensor(),
+        Normalize(mean=(0.48145466, 0.4578275, 0.40821073), std=(0.26862954, 0.26130258, 0.27577711))
+    ])
+    inputs=dict(pixel_values=image_processor(image_original).unsqueeze(0))
+    with torch.no_grad():
+        vision_outputs = _model.vision_model(**inputs)
+        image_embeds = vision_outputs[1]
+        image_embeds = _model.visual_projection(image_embeds)
+        image_embeds = image_embeds / image_embeds.norm(dim=-1, keepdim=True) # [1, 768]
+        # adapt to SD 1.5's token dims
+        image_embeds = image_embeds.unsqueeze(1)           # → [1, 1, 768]
+        image_embeds = image_embeds.repeat(1, 77, 1)       # → [1, 77, 768]
+
+    unconditional_embeds = torch.zeros_like(image_embeds)
+    image_embeddings = torch.cat([unconditional_embeds, image_embeds]).to(device).to(dtype)
+
+    # third option
+    # model = CLIPVisionModelWithProjection.from_pretrained(CLIP_SOURCE)
+    # processor = AutoProcessor.from_pretrained(CLIP_SOURCE)
+
+    # inputs = processor(images=image_original, return_tensors="pt")
+
+    # outputs = model(**inputs)
+    # image_embeds = outputs.image_embeds
+    # # adapt to SD 1.5's token dims
+    # image_embeds = image_embeds.unsqueeze(1)           # → [1, 1, 768]
+    # image_embeds = image_embeds.repeat(1, 77, 1)       # → [1, 77, 768]
+    # # print(image_embeds.shape)
+
+    # unconditional_embeds = torch.zeros_like(image_embeds)
+    # image_embeddings = torch.cat([unconditional_embeds, image_embeds]).to(device).to(dtype)
+
+    return image_embeddings
 
 @dataclass
 class UNet2DConditionOutput:
@@ -182,6 +251,7 @@ class IP2P_PTD(nn.Module):
         self.prompt = prompt
         self.a_prompt = a_prompt
         self.n_prompt = n_prompt
+        self.t_dec = t_dec
 
         # load model
         controlnet = ControlNetModel.from_pretrained(CN_SOURCE, torch_dtype=self.dtype, low_cpu_mem_usage=True).to(self.device)
@@ -224,45 +294,24 @@ class IP2P_PTD(nn.Module):
         # sam 2
         # set predictor
         self.predictor = SAM2ImagePredictor.from_pretrained("facebook/sam2.1-hiera-large")
-        self.input_point = np.array([[330, 256], [150, 256]])
+        self.input_point = np.array([[330, 256], [150, 256]]) # mannuly selected points, can be changed
         self.input_label = np.array([1, 1])
         CONSOLE.print("SAM2 predictor loaded!")
+
+        # load the secret view's original image
+        self.image_original = Image.open("data/fb5a96b1a2_original/DSC02791_original.png")
+        # self.image_original = Image.open("data/49a82360aa_original/DSC00043_original.png")
+        # self.image_original = Image.open("data/0cf2e9402d_original/DSC00356_original.png")
 
         # get the text embedding
         text_embeddings = encode_prompt_with_a_prompt_and_n_prompt(self.batch_size, self.prompt, self.a_prompt, self.n_prompt, tokenizer, text_encoder, self.device)
         text_embeddings_null = encode_prompt_only(self.batch_size, self.prompt, tokenizer, text_encoder, self.device)
         
         # get the image embedding
-        image_encoder = CLIPVisionModel.from_pretrained(CLIP_SOURCE)
-        image_processor = CLIPImageProcessor.from_pretrained(CLIP_SOURCE)
-        projection = torch.nn.Linear(1024, 768).to(self.dtype)
-        # projection = torch.nn.Linear(1024, 768 * 4).to(self.dtype)
-
-        # # Load IP-Adapter weights
-        # ip_adapter_path = "ip_adapter/ip-adapter_sd15.safetensors"
-        # ip_adapter_state_dict = load_file(ip_adapter_path)
-
-        # projection.load_state_dict({
-        #     "weight": ip_adapter_state_dict["image_proj.proj.weight"],
-        #     "bias": ip_adapter_state_dict["image_proj.proj.bias"]
-        # })
-
-        self.image_original = Image.open("data/fb5a96b1a2_original/DSC02791_original.png")
-        # self.image_original = Image.open("data/49a82360aa_original/DSC00043_original.png")
-        # self.image_original = Image.open("data/0cf2e9402d_original/DSC00356_original.png")
-
-        inputs = image_processor(images=self.image_original, return_tensors="pt")
-        image_embeds = image_encoder(**inputs).last_hidden_state.to(self.dtype)
-        conditional_embeds = projection(image_embeds)
-        # image_proj = projection(image_embeds)
-        # image_proj = image_proj.reshape(image_proj.shape[0], image_proj.shape[1], 4, 768)
-        # cls_embed = image_proj[:, 0, :, :]
-        # conditional_embeds = cls_embed
-        unconditional_embeds = torch.zeros_like(conditional_embeds)
-        image_embeddings = torch.cat([unconditional_embeds, conditional_embeds]).to(self.device)
+        image_embeddings = encode_image(self.image_original, self.dtype, self.device)
 
         uncond_image, cond_image = image_embeddings.chunk(2)
-        uncond_text, cond_text = text_embeddings.chunk(2)
+        uncond_text, cond_text = text_embeddings.chunk(2) # both have shape [1, 77, 768]
         uncond_text_null, cond_text_null = text_embeddings_null.chunk(2)
 
         # chose to use image embeddings or text embeddings
@@ -272,22 +321,7 @@ class IP2P_PTD(nn.Module):
 
         self.text_embeddings_ip2p = torch.cat([self.cond, self.uncond, self.uncond])
 
-        # # directly load the ref_latents
-        # # ref latent
-        # # self.ref_latent_path = './outputs/latent.pt'
-        # # self.ref_latent_path = './outputs/latent_face1.jpg_PTD.pt'
-        # # self.ref_latent_path = './outputs/latent_face1.jpt_cond.pt' # japanese
-        # # self.ref_latent_path = './outputs/latent_face1.jpg_cond.pt' # snowed 
-
-        # # don't use cond for DDIM inversion like above, the results are unstable
-        # # self.ref_latent_path = 'latent_face1.jpg.pt'
-        # self.ref_latent_path = 'latent_face2.jpg.pt'
-        # # self.ref_latent_path = 'latent_tum_white.png.pt'
-        # # self.ref_latent_path = 'latent_yellow_dog.jpg.pt'
-
-        # self.ref_latent_init = torch.load(self.ref_latent_path).cuda().to(self.dtype)
-
-        # generate the ref_latent using no a_prompt and n_prompt
+        # generate the ref_latent
         # self.ref_name = "tum_white.png"
         # self.ref_name = "face1.jpg"
         self.ref_name = "face2.jpg"
@@ -309,8 +343,6 @@ class IP2P_PTD(nn.Module):
         # self.ref_latent_path_2 = 'latent_yellow_dog.jpg.pt'
 
         self.ref_latent_2_init = torch.load(self.ref_latent_path_2).cuda().to(self.dtype)
-
-        self.t_dec = t_dec
 
         
     def load_ref_img(
@@ -463,8 +495,8 @@ class IP2P_PTD(nn.Module):
         """
         # DDIM inversion of ref image
         # should move this before the first stage, if before the second stage, the results would be different from normal results TODO: still debugging
-        # img_ref_tensor = self.load_ref_img()
-        img_ref_tensor = self.load_ref_img_and_mask() # use mask to replace the background
+        img_ref_tensor = self.load_ref_img()
+        # img_ref_tensor = self.load_ref_img_and_mask() # use mask to replace the background
 
         # reversion trajectory
         self.ref_latent_init = self.encode_ddim(img_ref_tensor)
