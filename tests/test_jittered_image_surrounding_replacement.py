@@ -55,10 +55,10 @@ render_size = 512
 contrast = 4.0
 add_noise = False
 noise_value = 0.05
-ref_name = "tum_white.png"
+# ref_name = "tum_white.png"
 # ref_name = "face1.jpg"
 # ref_name = "face2.jpg"
-# ref_name = "yellow_dog.jpg"
+ref_name = "yellow_dog.jpg"
 img = Image.open(f"data/ref_images/{ref_name}").convert('RGB').resize((render_size, render_size))
 img = torchvision.transforms.ColorJitter(contrast=(contrast, contrast))(img)
 

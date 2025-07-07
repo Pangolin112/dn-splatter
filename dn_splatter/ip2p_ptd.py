@@ -31,7 +31,8 @@ import torchvision
 from PIL import Image
 from sam2.sam2_image_predictor import SAM2ImagePredictor
 
-from transformers import CLIPVisionModel, CLIPImageProcessor
+from transformers import CLIPVisionModel, CLIPImageProcessor, CLIPVisionModelWithProjection
+from safetensors.torch import load_file
 
 CONSOLE = Console(width=120)
 
@@ -235,14 +236,28 @@ class IP2P_PTD(nn.Module):
         image_encoder = CLIPVisionModel.from_pretrained(CLIP_SOURCE)
         image_processor = CLIPImageProcessor.from_pretrained(CLIP_SOURCE)
         projection = torch.nn.Linear(1024, 768).to(self.dtype)
+        # projection = torch.nn.Linear(1024, 768 * 4).to(self.dtype)
 
-        # self.image_original = Image.open("data/fb5a96b1a2_original/DSC02791_original.png")
-        self.image_original = Image.open("data/49a82360aa_original/DSC00043_original.png")
+        # # Load IP-Adapter weights
+        # ip_adapter_path = "ip_adapter/ip-adapter_sd15.safetensors"
+        # ip_adapter_state_dict = load_file(ip_adapter_path)
+
+        # projection.load_state_dict({
+        #     "weight": ip_adapter_state_dict["image_proj.proj.weight"],
+        #     "bias": ip_adapter_state_dict["image_proj.proj.bias"]
+        # })
+
+        self.image_original = Image.open("data/fb5a96b1a2_original/DSC02791_original.png")
+        # self.image_original = Image.open("data/49a82360aa_original/DSC00043_original.png")
         # self.image_original = Image.open("data/0cf2e9402d_original/DSC00356_original.png")
 
         inputs = image_processor(images=self.image_original, return_tensors="pt")
         image_embeds = image_encoder(**inputs).last_hidden_state.to(self.dtype)
-        conditional_embeds = projection(image_embeds)[:, :77, :]
+        conditional_embeds = projection(image_embeds)
+        # image_proj = projection(image_embeds)
+        # image_proj = image_proj.reshape(image_proj.shape[0], image_proj.shape[1], 4, 768)
+        # cls_embed = image_proj[:, 0, :, :]
+        # conditional_embeds = cls_embed
         unconditional_embeds = torch.zeros_like(conditional_embeds)
         image_embeddings = torch.cat([unconditional_embeds, conditional_embeds]).to(self.device)
 
@@ -273,16 +288,17 @@ class IP2P_PTD(nn.Module):
         # self.ref_latent_init = torch.load(self.ref_latent_path).cuda().to(self.dtype)
 
         # generate the ref_latent using no a_prompt and n_prompt
-        self.ref_name = "tum_white.png"
+        # self.ref_name = "tum_white.png"
         # self.ref_name = "face1.jpg"
-        # self.ref_name = "face2.jpg"
+        self.ref_name = "face2.jpg"
         # self.ref_name = "yellow_dog.jpg"
+        # self.ref_name = "qr_code.png"
 
         self.ref_img_path = f'./data/ref_images/{self.ref_name}'
         self.ref_latent_path = f'./outputs/latents/latent_{self.ref_name}.pt'
         self.t_enc = 1000
-        self.add_noise = True #False for normal images, True for sharp images
-        self.noise_value = 0.05
+        self.add_noise = False #False for normal images, True for sharp images
+        self.noise_value = 0.05 # default: 0.05
         self.contrast = 10.0 # default 2.0
         self.DDIM_inversion()
 
@@ -327,59 +343,6 @@ class IP2P_PTD(nn.Module):
         Returns:
             img_tensor: reference image tensor
         """
-        # img = Image.open(self.ref_img_path).convert('RGB').resize((self.render_size, self.render_size))
-        # img = torchvision.transforms.ColorJitter(contrast=(self.contrast, self.contrast))(img)
-        # # save Jitter image
-        # img.save(f'./outputs/jittered_images/{self.ref_name}_{self.contrast}.png', 'PNG')
-
-        # with torch.inference_mode(), torch.autocast("cuda", dtype=torch.bfloat16):
-        #     self.predictor.set_image(img)
-        #     masks, scores, logits = self.predictor.predict(
-        #         point_coords=self.input_point,
-        #         point_labels=self.input_label,
-        #         multimask_output=True,
-        #     )
-
-        # # Convert to tensor and add noise BEFORE segmentation
-        # img_array = np.array(img)
-        # img_tensor = torch.from_numpy(img_array).permute(2, 0, 1)[None, ...].float() / 255.0  # 0~1 range
-        
-        # if self.add_noise:
-        #     # Add noise to the tensor
-        #     noise = torch.rand_like(img_tensor)  # 0~1 range
-        #     img_tensor = (1 - self.noise_value) * img_tensor + self.noise_value * noise
-        
-        # # Convert back to PIL Image for SAM2 predictor
-        # img_with_noise = img_tensor.squeeze(0).permute(1, 2, 0).numpy()
-        # img_with_noise = (img_with_noise * 255).astype(np.uint8)
-        # img_pil = Image.fromarray(img_with_noise)
-
-        # mask_pixel_counts = [np.sum(mask) for mask in masks]
-        # max_pixels_idx = np.argmax(mask_pixel_counts)
-        # mask = masks[max_pixels_idx]
-        # img_array = np.array(img)
-        # image_original_array = np.array(self.image_original)
-        # mask_3d = np.stack([mask] * 3, axis=-1)
-        # composite_image = np.where(mask_3d, img_array, image_original_array)
-        # result_image = Image.fromarray(composite_image.astype(np.uint8))
-
-        # img = result_image
-        # img.save(f'./outputs/jittered_images/{self.ref_name}_{self.contrast}_composite.png', 'PNG')
-
-        # torch.cuda.empty_cache()
-
-        # img = np.array(img)
-        # if len(img.shape) == 2:
-        #     print('Image is grayscale, stack the channels!')
-        #     img = np.stack([img, img, img], axis=-1)
-        # img = (img.astype(np.float32) / 127.5) - 1.0           # -1 ~ 1
-        # img_tensor = torch.from_numpy(img).permute(2, 0, 1)[None, ...].cuda()   # 1, 3, 512, 512
-        # if self.add_noise:
-        #     noise = (torch.rand_like(img_tensor) - 0.5) / 0.5      # -1 ~ 1
-        #     img_tensor = (1 - self.noise_value) * img_tensor + self.noise_value * noise
-
-        # return img_tensor.to(self.dtype)
-
         # Load and preprocess image
         img = Image.open(self.ref_img_path).convert('RGB').resize((self.render_size, self.render_size))
         img = torchvision.transforms.ColorJitter(contrast=(self.contrast, self.contrast))(img)
