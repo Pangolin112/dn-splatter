@@ -80,7 +80,7 @@ seed: 99
 
 # prompts
 prompt_1: "a castle"
-prompt_2: "make it a baroque style room"
+prompt_2: ""
 a_prompt: ", best quality, high quality, extremely detailed, good geometry, high-res photo"
 n_prompt: "deformed, extra digit, fewer digits, cropped, worst quality, low quality, smoke, shading, lighting, lumination, shadow, text in image, watermarks"
 
@@ -100,12 +100,12 @@ transfer_ratio: 0.0 #default: 0.0; if not == 0.0, should be (1 - direct_transfer
 
 blending_ratio_default: 1.0 #default: 1.0 fully use the ref phase in direct transfer stage; if set to 0.0, no phase transfer
 
-async_ahead_steps: 20 # default: 0, no async ahead; [-10, 10] (original PTD), the higher the better embedding effects
+async_ahead_steps: 50 #20 # default: 0, no async ahead; [-10, 10] (original PTD), the higher the better embedding effects
 
 # IP2P
 t_dec: 20
 image_guidance_scale_ip2p: 1.0 # decrease the cs would create better results w depth condition
-image_guidance_scale_ip2p_ptd: 1.3 # increase the cs would make the results more similar to the input image 
+image_guidance_scale_ip2p_ptd: 2.0 #1.3 # increase the cs would make the results more similar to the input image 
 lower_bound: 0.98 # the higher the better
 upper_bound: 0.99 # the higher the better
 

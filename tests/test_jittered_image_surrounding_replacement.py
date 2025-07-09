@@ -4,6 +4,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 from PIL import Image
 import torchvision
+import cv2
+import os
 
 np.random.seed(3)
 
@@ -50,15 +52,79 @@ def show_masks(image, masks, scores, point_coords=None, box_coords=None, input_l
         plt.axis('off')
         plt.show()
 
+def save_images_for_poisson_editing(img, image_original_resized, mask, output_folder="tests/input/2"):
+    """
+    Save images in the format expected by Poisson image editing:
+    - source: the reference image (img)
+    - target: the original image (image_original_resized)
+    - mask: the segmentation mask
+    """
+    # Create output directory if it doesn't exist
+    os.makedirs(output_folder, exist_ok=True)
+    
+    # Convert PIL images to numpy arrays if needed
+    if isinstance(img, Image.Image):
+        source_array = np.array(img)
+    else:
+        source_array = img
+    
+    if isinstance(image_original_resized, Image.Image):
+        target_array = np.array(image_original_resized)
+    else:
+        target_array = image_original_resized
+    
+    # Ensure mask is in the right format (0-255, uint8)
+    if mask.dtype == bool:
+        mask_array = (mask * 255).astype(np.uint8)
+    else:
+        mask_array = (mask * 255).astype(np.uint8)
+    
+    # Save source image (reference image with face/object)
+    source_path = os.path.join(output_folder, "source.png")
+    if isinstance(img, Image.Image):
+        img.save(source_path)
+    else:
+        cv2.imwrite(source_path, cv2.cvtColor(source_array, cv2.COLOR_RGB2BGR))
+    print(f"Saved source image to: {source_path}")
+    
+    # Save target image (original background)
+    target_path = os.path.join(output_folder, "target.png")
+    if isinstance(image_original_resized, Image.Image):
+        image_original_resized.save(target_path)
+    else:
+        cv2.imwrite(target_path, cv2.cvtColor(target_array, cv2.COLOR_RGB2BGR))
+    print(f"Saved target image to: {target_path}")
+    
+    # Save mask image
+    mask_path = os.path.join(output_folder, "mask.png")
+    cv2.imwrite(mask_path, mask_array)
+    print(f"Saved mask image to: {mask_path}")
+    
+    # Optional: Save a preview of what will be blended
+    preview_path = os.path.join(output_folder, "preview.png")
+    mask_3d = np.stack([mask] * 3, axis=-1)
+    preview = np.where(mask_3d, source_array, target_array)
+    cv2.imwrite(preview_path, cv2.cvtColor(preview, cv2.COLOR_RGB2BGR))
+    print(f"Saved preview image to: {preview_path}")
+    
+    print(f"\nImages saved to {output_folder}/")
+    print("Files created:")
+    print("- source.png (reference image)")
+    print("- target.png (original background)")
+    print("- mask.png (segmentation mask)")
+    print("- preview.png (simple blend preview)")
+    
+    return source_path, target_path, mask_path, preview_path
+
 # Load and preprocess the image
 render_size = 512
 contrast = 4.0
 add_noise = False
 noise_value = 0.05
 # ref_name = "tum_white.png"
-# ref_name = "face1.jpg"
+ref_name = "face1.jpg"
 # ref_name = "face2.jpg"
-ref_name = "yellow_dog.jpg"
+# ref_name = "yellow_dog.jpg"
 img = Image.open(f"data/ref_images/{ref_name}").convert('RGB').resize((render_size, render_size))
 img = torchvision.transforms.ColorJitter(contrast=(contrast, contrast))(img)
 
@@ -80,9 +146,11 @@ masks = masks[sorted_ind]
 scores = scores[sorted_ind]
 logits = logits[sorted_ind]
 
-show_masks(img, masks, scores, point_coords=input_point, input_labels=input_label, borders=True)
+# show_masks(img, masks, scores, point_coords=input_point, input_labels=input_label, borders=True)
 
-image_original = Image.open("data/fb5a96b1a2_original/DSC02791_original.png")
+# image_original = Image.open("data/fb5a96b1a2_original/DSC02791_original.png")
+# image_original = Image.open("data/49a82360aa_original/DSC00043_original.png")
+image_original = Image.open("data/0cf2e9402d_original/DSC00356_original.png")
 
 # select the mask that has the most white pixels (highest coverage area)
 # Calculate the number of white pixels (True values) in each mask
@@ -92,8 +160,10 @@ mask_pixel_counts = [np.sum(mask) for mask in masks]
 max_pixels_idx = np.argmax(mask_pixel_counts)
 
 # Select the mask with the most white pixels
-# mask = masks[0]
-mask = masks[max_pixels_idx]
+if ref_name == "tum_white.png":
+    mask = masks[0]
+else:
+    mask = masks[max_pixels_idx]
 
 # First, ensure both images have the same size
 # Resize image_original to match the size of img (render_size x render_size)
@@ -139,3 +209,21 @@ plt.axis('off')
 
 plt.tight_layout()
 plt.show()
+
+# Save images for Poisson image editing
+print("\n" + "="*50)
+print("SAVING IMAGES FOR POISSON IMAGE EDITING")
+print("="*50)
+
+input_dir_name = "7"
+
+source_path, target_path, mask_path, preview_path = save_images_for_poisson_editing(
+    img=img,  # Reference image (source)
+    image_original_resized=image_original_resized,  # Original background (target)
+    mask=mask,  # Segmentation mask
+    output_folder=f"tests/input/{input_dir_name}"
+)
+
+print(f"\nYou can now run Poisson image editing with:")
+print(f"python tests/test_pie.py")
+print(f"\nThe result will be saved to: tests/output/{input_dir_name}/result.png")

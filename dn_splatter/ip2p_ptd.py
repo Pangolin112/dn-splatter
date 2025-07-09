@@ -291,16 +291,9 @@ class IP2P_PTD(nn.Module):
 
         CONSOLE.print("PTDiffusion loaded!")
 
-        # sam 2
-        # set predictor
-        self.predictor = SAM2ImagePredictor.from_pretrained("facebook/sam2.1-hiera-large")
-        self.input_point = np.array([[330, 256], [150, 256]]) # mannuly selected points, can be changed
-        self.input_label = np.array([1, 1])
-        CONSOLE.print("SAM2 predictor loaded!")
-
         # load the secret view's original image
-        self.image_original = Image.open("data/fb5a96b1a2_original/DSC02791_original.png")
-        # self.image_original = Image.open("data/49a82360aa_original/DSC00043_original.png")
+        # self.image_original = Image.open("data/fb5a96b1a2_original/DSC02791_original.png")
+        self.image_original = Image.open("data/49a82360aa_original/DSC00043_original.png")
         # self.image_original = Image.open("data/0cf2e9402d_original/DSC00356_original.png")
 
         # get the text embedding
@@ -315,21 +308,56 @@ class IP2P_PTD(nn.Module):
         uncond_text_null, cond_text_null = text_embeddings_null.chunk(2)
 
         # chose to use image embeddings or text embeddings
-        # self.uncond, self.cond = uncond_image, cond_image
+        self.uncond, self.cond = uncond_image, cond_image
         # self.uncond, self.cond = uncond_text, cond_text
-        self.uncond, self.cond = uncond_text_null, cond_text_null
+        # self.uncond, self.cond = uncond_text_null, cond_text_null
 
         self.text_embeddings_ip2p = torch.cat([self.cond, self.uncond, self.uncond])
 
         # generate the ref_latent
         # self.ref_name = "tum_white.png"
-        # self.ref_name = "face1.jpg"
-        self.ref_name = "face2.jpg"
+        self.ref_name = "face1.jpg"
+        # self.ref_name = "face2.jpg"
         # self.ref_name = "yellow_dog.jpg"
         # self.ref_name = "qr_code.png"
 
+        # sam 2
+        # set predictor
+        self.predictor = SAM2ImagePredictor.from_pretrained("facebook/sam2.1-hiera-large")
+        self.input_point = np.array([[330, 256], [150, 256]]) # mannuly selected points, can be changed
+        self.input_label = np.array([1, 1])
+        CONSOLE.print("SAM2 predictor loaded!")
+
+        # encode reference image
         self.ref_img_path = f'./data/ref_images/{self.ref_name}'
         self.ref_latent_path = f'./outputs/latents/latent_{self.ref_name}.pt'
+
+        img = Image.open(self.ref_img_path).convert('RGB').resize((self.render_size, self.render_size))
+
+        with torch.inference_mode(), torch.autocast("cuda", dtype=torch.bfloat16):
+            self.predictor.set_image(img)
+            masks, scores, logits = self.predictor.predict(
+                point_coords=self.input_point,
+                point_labels=self.input_label,
+                multimask_output=True,
+            )
+
+        sorted_ind = np.argsort(scores)[::-1]
+        masks = masks[sorted_ind]
+        scores = scores[sorted_ind]
+        logits = logits[sorted_ind]
+        # Select mask with most pixels
+        mask_pixel_counts = [np.sum(mask) for mask in masks]
+        max_pixels_idx = np.argmax(mask_pixel_counts)
+        if self.ref_name == "tum_white.png":
+            self.mask = masks[0]  # use the first mask for tum_white
+        else:
+            self.mask = masks[max_pixels_idx]
+
+        mask_array = (self.mask * 255).astype(np.uint8)
+        import cv2
+        cv2.imwrite(f'./outputs/jittered_images/{self.ref_name}_mask.png', mask_array)
+
         self.t_enc = 1000
         self.add_noise = False #False for normal images, True for sharp images
         self.noise_value = 0.05 # default: 0.05
