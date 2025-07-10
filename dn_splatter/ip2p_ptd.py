@@ -308,9 +308,9 @@ class IP2P_PTD(nn.Module):
         uncond_text_null, cond_text_null = text_embeddings_null.chunk(2)
 
         # chose to use image embeddings or text embeddings
-        self.uncond, self.cond = uncond_image, cond_image
+        # self.uncond, self.cond = uncond_image, cond_image
         # self.uncond, self.cond = uncond_text, cond_text
-        # self.uncond, self.cond = uncond_text_null, cond_text_null
+        self.uncond, self.cond = uncond_text_null, cond_text_null
 
         self.text_embeddings_ip2p = torch.cat([self.cond, self.uncond, self.uncond])
 

@@ -55,7 +55,7 @@ def opencv_seamless_clone(source, target, mask):
     """
     Use OpenCV's built-in seamless cloning (fastest option)
     """
-    print("Using OpenCV seamless cloning...")
+    # print("Using OpenCV seamless cloning...")
     
     try:
         # Ensure all images have the same size
@@ -65,9 +65,9 @@ def opencv_seamless_clone(source, target, mask):
             mask = cv2.resize(mask, (w, h), interpolation=cv2.INTER_NEAREST)
         
         # Debug mask information
-        print(f"Mask dtype: {mask.dtype}, shape: {mask.shape}")
-        print(f"Mask unique values: {np.unique(mask)}")
-        print(f"Mask white pixels: {np.sum(mask > 0)}")
+        # print(f"Mask dtype: {mask.dtype}, shape: {mask.shape}")
+        # print(f"Mask unique values: {np.unique(mask)}")
+        # print(f"Mask white pixels: {np.sum(mask > 0)}")
         
         # Ensure mask is uint8 and binary
         if mask.dtype == bool:
@@ -80,20 +80,20 @@ def opencv_seamless_clone(source, target, mask):
         # Make mask binary (0 or 255) - be more aggressive about this
         mask_uint8 = np.where(mask_uint8 > 0, 255, 0).astype(np.uint8)
         
-        print(f"Processed mask dtype: {mask_uint8.dtype}")
-        print(f"Processed mask unique values: {np.unique(mask_uint8)}")
-        print(f"Processed mask white pixels: {np.sum(mask_uint8 > 0)}")
+        # print(f"Processed mask dtype: {mask_uint8.dtype}")
+        # print(f"Processed mask unique values: {np.unique(mask_uint8)}")
+        # print(f"Processed mask white pixels: {np.sum(mask_uint8 > 0)}")
         
         # Find contours with different retrieval modes
         contours, hierarchy = cv2.findContours(mask_uint8, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         
-        print(f"Found {len(contours)} contours")
+        # print(f"Found {len(contours)} contours")
         
         if len(contours) == 0:
             # Try different contour finding approach
-            print("Trying alternative contour detection...")
+            # print("Trying alternative contour detection...")
             contours, hierarchy = cv2.findContours(mask_uint8, cv2.RETR_LIST, cv2.CHAIN_APPROX_NONE)
-            print(f"Alternative method found {len(contours)} contours")
+            # print(f"Alternative method found {len(contours)} contours")
         
         if len(contours) == 0:
             print("Still no contours found. Trying morphological operations...")
@@ -103,10 +103,10 @@ def opencv_seamless_clone(source, target, mask):
             mask_cleaned = cv2.morphologyEx(mask_cleaned, cv2.MORPH_OPEN, kernel)
             
             contours, hierarchy = cv2.findContours(mask_cleaned, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            print(f"After morphological operations: {len(contours)} contours")
+            # print(f"After morphological operations: {len(contours)} contours")
             
             if len(contours) == 0:
-                print("No contours found even after cleanup. Using center of mass approach...")
+                # print("No contours found even after cleanup. Using center of mass approach...")
                 # Fallback: use center of mass
                 moments = cv2.moments(mask_uint8)
                 if moments['m00'] > 0:
@@ -128,7 +128,7 @@ def opencv_seamless_clone(source, target, mask):
                             center_x = white_pixels[1][0]
                     
                     center = (center_x, center_y)
-                    print(f"Using center of mass: {center}")
+                    # print(f"Using center of mass: {center}")
                     
                     # Try seamless clone with center of mass
                     result = cv2.seamlessClone(source, target, mask_uint8, center, cv2.NORMAL_CLONE)
@@ -141,11 +141,11 @@ def opencv_seamless_clone(source, target, mask):
         # Get the largest contour
         largest_contour = max(contours, key=cv2.contourArea)
         contour_area = cv2.contourArea(largest_contour)
-        print(f"Largest contour area: {contour_area}")
+        # print(f"Largest contour area: {contour_area}")
         
         # Get bounding rectangle
         x, y, w, h = cv2.boundingRect(largest_contour)
-        print(f"Bounding rectangle: x={x}, y={y}, w={w}, h={h}")
+        # print(f"Bounding rectangle: x={x}, y={y}, w={w}, h={h}")
         
         # Ensure the bounding box is within image bounds
         img_h, img_w = target.shape[:2]
@@ -172,7 +172,7 @@ def opencv_seamless_clone(source, target, mask):
         
         center = (center_x, center_y)
         
-        print(f"Using center point: {center}, mask region: ({x},{y},{w},{h})")
+        # print(f"Using center point: {center}, mask region: ({x},{y},{w},{h})")
         
         # Perform seamless cloning
         result = cv2.seamlessClone(source, target, mask_uint8, center, cv2.NORMAL_CLONE)
