@@ -51,6 +51,8 @@ from nerfstudio.models.splatfacto import (
 from nerfstudio.utils.colors import get_color
 from nerfstudio.utils.rich_utils import CONSOLE
 
+import lpips
+
 
 @dataclass
 class DNSplatterModelConfig(SplatfactoModelConfig):
@@ -179,6 +181,11 @@ class DNSplatterModel(SplatfactoModel):
 
         self.ssim = StructuralSimilarityIndexMeasure(data_range=1.0, kernel_size=11)
         self.lpips = LearnedPerceptualImagePatchSimilarity()
+
+        # ######### add LPIPS loss ##############
+        self.lpips_loss_fn = lpips.LPIPS(net='vgg').to(torch.device("cuda"))
+        # ######### add LPIPS loss ##############
+
         self.psnr = PeakSignalNoiseRatio(data_range=1.0)
         self.rgb_metrics = RGBMetrics()
         self.depth_metrics = DepthMetrics()
@@ -637,6 +644,14 @@ class DNSplatterModel(SplatfactoModel):
         gt_img = self.get_gt_img(batch["image"]).clamp(min=10 / 255.0)
         pred_img = outputs["rgb"]
         depth_out = outputs["depth"]
+
+        # ######### add LPIPS loss ##############
+        lpips_lambda = 0.1
+        main_loss += lpips_lambda * self.lpips_loss_fn(
+            (pred_img.permute(2, 0, 1).unsqueeze(0) * 2 - 1).clamp(-1, 1),
+            (gt_img.permute(2, 0, 1).unsqueeze(0).to(torch.device("cuda")) * 2 - 1).clamp(-1, 1),
+        ).squeeze()
+        # ######### add LPIPS loss ##############
 
         sensor_depth_gt = None
         mono_depth_gt = None

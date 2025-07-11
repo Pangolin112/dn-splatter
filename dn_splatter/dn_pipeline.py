@@ -196,6 +196,7 @@ class DNSplatterPipeline(VanillaPipeline):
         self.ip2p_ptd = IP2P_PTD(
             self.dtype, 
             self.config_secret.device, 
+            conditioning_scale = self.config_secret.conditioning_scale,
             prompt=self.config_secret.prompt_2, 
             a_prompt=self.config_secret.a_prompt,
             n_prompt=self.config_secret.n_prompt,

@@ -131,7 +131,8 @@ def opencv_seamless_clone(source, target, mask):
                     # print(f"Using center of mass: {center}")
                     
                     # Try seamless clone with center of mass
-                    result = cv2.seamlessClone(source, target, mask_uint8, center, cv2.NORMAL_CLONE)
+                    # result = cv2.seamlessClone(source, target, mask_uint8, center, cv2.NORMAL_CLONE)
+                    result = cv2.seamlessClone(source, target, mask_uint8, center, cv2.MIXED_CLONE)
                     return result
                 else:
                     raise Exception("No valid mask region found")
