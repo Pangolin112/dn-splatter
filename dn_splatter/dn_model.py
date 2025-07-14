@@ -646,11 +646,11 @@ class DNSplatterModel(SplatfactoModel):
         depth_out = outputs["depth"]
 
         # ######### add LPIPS loss ##############
-        lpips_lambda = 0.1
-        main_loss += lpips_lambda * self.lpips_loss_fn(
-            (pred_img.permute(2, 0, 1).unsqueeze(0) * 2 - 1).clamp(-1, 1),
-            (gt_img.permute(2, 0, 1).unsqueeze(0).to(torch.device("cuda")) * 2 - 1).clamp(-1, 1),
-        ).squeeze()
+        # lpips_lambda = 0.2
+        # main_loss += lpips_lambda * self.lpips_loss_fn(
+        #     (pred_img.permute(2, 0, 1).unsqueeze(0) * 2 - 1).clamp(-1, 1),
+        #     (gt_img.permute(2, 0, 1).unsqueeze(0).to(torch.device("cuda")) * 2 - 1).clamp(-1, 1),
+        # ).squeeze()
         # ######### add LPIPS loss ##############
 
         sensor_depth_gt = None

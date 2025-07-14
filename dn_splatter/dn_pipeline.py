@@ -222,6 +222,13 @@ class DNSplatterPipeline(VanillaPipeline):
 
         self.first_iter = True
 
+        # refenece image for lpips computing
+        self.ref_image = Image.open(self.ip2p_ptd.ref_img_path).convert('RGB').resize((self.config_secret.render_size, self.config_secret.render_size))
+        # Convert reference image to tensor and process it the same way
+        ref_image_tensor = torch.from_numpy(np.array(self.ref_image)).float() / 255.0  # Convert to [0, 1] range
+        ref_image_tensor = ref_image_tensor.permute(2, 0, 1).unsqueeze(0)  # [H, W, C] -> [1, C, H, W]
+        self.ref_image_tensor = (ref_image_tensor * 2 - 1).clamp(-1, 1).to(self.config_secret.device)  # Convert to [-1, 1] range
+
         c2w_secret = np.concatenate(
             [
                 self.camera_secret.camera_to_worlds.cpu().numpy()[0],
@@ -1062,10 +1069,18 @@ class DNSplatterPipeline(VanillaPipeline):
                     for k, v in loss_dict_secret.items():
                         loss_dict[f"secret_{k}"] = v
                     
+                    # compute lpips score between ref image and current secret rendering
+                    lpips_score = self.lpips_loss_fn(
+                        (model_outputs_secret["rgb"].permute(2, 0, 1).unsqueeze(0) * 2 - 1).clamp(-1, 1),
+                        self.ref_image_tensor
+                    )
+                    print(f"lpips score: {lpips_score.item():.6f}")
+
                     # save edited secret image
                     if step % 50 == 0:
                         image_save_secret = torch.cat([depth_tensor_secret, rendered_image_secret, edited_image_secret.to(self.config_secret.device), self.original_image_secret.to(self.config_secret.device)])
-                        save_image((image_save_secret).clamp(0, 1), image_dir / f'{step}_secret_list.png')
+                        save_image((image_save_secret).clamp(0, 1), image_dir / f'{step}_{lpips_score.item():.6f}_secret_list.png')
+   
             else:
                 # non-editing steps loss computing
                 camera, data = self.datamanager.next_train(step)
@@ -1149,7 +1164,6 @@ class DNSplatterPipeline(VanillaPipeline):
 
                 # ###########################################
                 # Convert PyTorch tensors to NumPy arrays for opencv_seamless_clone
-
                 edited_image_target, depth_tensor_target = self.ip2p_depth.edit_image_depth(
                     self.text_embeddings_ip2p.to(self.config_secret.device),
                     rendered_image_secret.to(self.dtype),
@@ -1220,10 +1234,19 @@ class DNSplatterPipeline(VanillaPipeline):
                 for k, v in loss_dict_secret.items():
                     loss_dict[f"secret_{k}"] = v
                 
+                # compute lpips score between ref image and current secret rendering
+                lpips_score = self.lpips_loss_fn(
+                    (model_outputs_secret["rgb"].permute(2, 0, 1).unsqueeze(0) * 2 - 1).clamp(-1, 1),
+                    self.ref_image_tensor
+                )
+                print(f"lpips score: {lpips_score.item():.6f}")
+
                 # save edited secret image
                 image_save_secret = torch.cat([depth_tensor_secret, rendered_image_secret, edited_image_secret.to(self.config_secret.device), self.original_image_secret.to(self.config_secret.device)])
-                save_image((image_save_secret).clamp(0, 1), image_dir / f'{step}_secret_list.png')
+                save_image((image_save_secret).clamp(0, 1), image_dir / f'{step}_{lpips_score.item():.6f}_secret_list.png')
                 save_image((edited_image_secret.to(self.config_secret.device)).clamp(0, 1), image_dir / f'{step}_poisson_image.png')
+
+                
 
             #increment curr edit idx
             # and update all the images in the dataset
