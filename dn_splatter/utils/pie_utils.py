@@ -89,60 +89,8 @@ def opencv_seamless_clone(source, target, mask):
         
         # print(f"Found {len(contours)} contours")
         
-        if len(contours) == 0:
-            # Try different contour finding approach
-            # print("Trying alternative contour detection...")
-            contours, hierarchy = cv2.findContours(mask_uint8, cv2.RETR_LIST, cv2.CHAIN_APPROX_NONE)
-            # print(f"Alternative method found {len(contours)} contours")
-        
-        if len(contours) == 0:
-            print("Still no contours found. Trying morphological operations...")
-            # Apply morphological operations to clean up mask
-            kernel = np.ones((3,3), np.uint8)
-            mask_cleaned = cv2.morphologyEx(mask_uint8, cv2.MORPH_CLOSE, kernel)
-            mask_cleaned = cv2.morphologyEx(mask_cleaned, cv2.MORPH_OPEN, kernel)
-            
-            contours, hierarchy = cv2.findContours(mask_cleaned, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            # print(f"After morphological operations: {len(contours)} contours")
-            
-            if len(contours) == 0:
-                # print("No contours found even after cleanup. Using center of mass approach...")
-                # Fallback: use center of mass
-                moments = cv2.moments(mask_uint8)
-                if moments['m00'] > 0:
-                    center_x = int(moments['m10'] / moments['m00'])
-                    center_y = int(moments['m01'] / moments['m00'])
-                    center = (center_x, center_y)
-                    
-                    # Ensure center is within bounds and in mask region
-                    h, w = mask_uint8.shape
-                    center_x = max(1, min(center_x, w - 2))
-                    center_y = max(1, min(center_y, h - 2))
-                    
-                    # Make sure center is in a white region
-                    if mask_uint8[center_y, center_x] == 0:
-                        # Find any white pixel
-                        white_pixels = np.where(mask_uint8 > 0)
-                        if len(white_pixels[0]) > 0:
-                            center_y = white_pixels[0][0]
-                            center_x = white_pixels[1][0]
-                    
-                    center = (center_x, center_y)
-                    # print(f"Using center of mass: {center}")
-                    
-                    # Try seamless clone with center of mass
-                    # result = cv2.seamlessClone(source, target, mask_uint8, center, cv2.NORMAL_CLONE)
-                    result = cv2.seamlessClone(source, target, mask_uint8, center, cv2.MIXED_CLONE)
-                    return result
-                else:
-                    raise Exception("No valid mask region found")
-            else:
-                mask_uint8 = mask_cleaned
-        
         # Get the largest contour
         largest_contour = max(contours, key=cv2.contourArea)
-        contour_area = cv2.contourArea(largest_contour)
-        # print(f"Largest contour area: {contour_area}")
         
         # Get bounding rectangle
         x, y, w, h = cv2.boundingRect(largest_contour)
@@ -176,7 +124,8 @@ def opencv_seamless_clone(source, target, mask):
         # print(f"Using center point: {center}, mask region: ({x},{y},{w},{h})")
         
         # Perform seamless cloning
-        result = cv2.seamlessClone(source, target, mask_uint8, center, cv2.NORMAL_CLONE)
+        # result = cv2.seamlessClone(source, target, mask_uint8, center, cv2.NORMAL_CLONE)
+        result = cv2.seamlessClone(source, target, mask_uint8, center, cv2.MIXED_CLONE)
         
         return result
         

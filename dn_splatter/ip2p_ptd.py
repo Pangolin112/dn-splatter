@@ -360,7 +360,10 @@ class IP2P_PTD(nn.Module):
         cv2.imwrite(f'./outputs/jittered_images/{self.ref_name}_mask.png', mask_array)
 
         self.t_enc = 1000
-        self.add_noise = False #False for normal images, True for sharp images
+        if self.ref_name == "tum_white.png" or self.ref_name == "tum_black.png":
+            self.add_noise = True #False for normal images, True for sharp images
+        else:
+            self.add_noise = False
         self.noise_value = 0.05 # default: 0.05
         self.contrast = 10.0 # default 2.0
         self.DDIM_inversion()

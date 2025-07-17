@@ -427,10 +427,6 @@ def opencv_seamless_clone(source, target, mask):
         print(f"Processed mask unique values: {np.unique(mask_uint8)}")
         print(f"Processed mask white pixels: {np.sum(mask_uint8 > 0)}")
         
-        # Save debug mask to check what we're working with
-        cv2.imwrite("tests/output/2/debug_mask.png", mask_uint8)
-        print("Saved debug mask to tests/output/2/debug_mask.png")
-        
         # Find contours with different retrieval modes
         contours, hierarchy = cv2.findContours(mask_uint8, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         
@@ -478,7 +474,8 @@ def opencv_seamless_clone(source, target, mask):
                     print(f"Using center of mass: {center}")
                     
                     # Try seamless clone with center of mass
-                    result = cv2.seamlessClone(source, target, mask_uint8, center, cv2.NORMAL_CLONE)
+                    # result = cv2.seamlessClone(source, target, mask_uint8, center, cv2.NORMAL_CLONE)
+                    result = cv2.seamlessClone(source, target, mask_uint8, center, cv2.MIXED_CLONE)
                     return result
                 else:
                     raise Exception("No valid mask region found")
@@ -522,7 +519,8 @@ def opencv_seamless_clone(source, target, mask):
         print(f"Using center point: {center}, mask region: ({x},{y},{w},{h})")
         
         # Perform seamless cloning
-        result = cv2.seamlessClone(source, target, mask_uint8, center, cv2.NORMAL_CLONE)
+        # result = cv2.seamlessClone(source, target, mask_uint8, center, cv2.NORMAL_CLONE)
+        result = cv2.seamlessClone(source, target, mask_uint8, center, cv2.MIXED_CLONE)
         
         return result
         
@@ -830,11 +828,11 @@ def quick_blend_example():
     Quick example of fast blending with error handling
     """
 
-    input_dir_name = "2"
+    input_dir_name = "6"
 
     try:
         # Load your images
-        source = cv2.imread(f"tests/input/{input_dir_name}/30000_secret_image.png")
+        source = cv2.imread(f"tests/input/{input_dir_name}/source.png")
         target = cv2.imread(f"tests/input/{input_dir_name}/target.png") 
         mask = cv2.imread(f"tests/input/{input_dir_name}/mask.png", cv2.IMREAD_GRAYSCALE)
         

@@ -27,7 +27,6 @@ def scannet_to_controlnet_depth(depth_path, min_depth=0.1, max_depth=10.0):
     # Load depth
     depth_mm = cv2.imread(depth_path, cv2.IMREAD_ANYDEPTH)
     depth_m = depth_mm / 1000.0
-    print(depth_m)
     
     # Handle invalid depths (0 or infinity)
     depth_m[depth_mm == 0] = max_depth

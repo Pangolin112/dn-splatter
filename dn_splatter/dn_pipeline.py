@@ -1074,7 +1074,7 @@ class DNSplatterPipeline(VanillaPipeline):
                         (model_outputs_secret["rgb"].permute(2, 0, 1).unsqueeze(0) * 2 - 1).clamp(-1, 1),
                         self.ref_image_tensor
                     )
-                    print(f"lpips score: {lpips_score.item():.6f}")
+                    # print(f"lpips score: {lpips_score.item():.6f}")
 
                     # save edited secret image
                     if step % 50 == 0:
