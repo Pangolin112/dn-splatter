@@ -122,9 +122,11 @@ contrast = 4.0
 add_noise = False
 noise_value = 0.05
 # ref_name = "tum_white.png"
-ref_name = "face1.jpg"
+# ref_name = "face1.jpg"
 # ref_name = "face2.jpg"
 # ref_name = "yellow_dog.jpg"
+ref_name = "dancing_lion.png"
+
 img = Image.open(f"data/ref_images/{ref_name}").convert('RGB').resize((render_size, render_size))
 img = torchvision.transforms.ColorJitter(contrast=(contrast, contrast))(img)
 
@@ -221,7 +223,7 @@ source_path, target_path, mask_path, preview_path = save_images_for_poisson_edit
     img=img,  # Reference image (source)
     image_original_resized=image_original_resized,  # Original background (target)
     mask=mask,  # Segmentation mask
-    output_folder=f"tests/input/{input_dir_name}"
+    output_folder=f"tests/output/{input_dir_name}"
 )
 
 print(f"\nYou can now run Poisson image editing with:")

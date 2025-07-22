@@ -180,3 +180,6 @@ renders
 work_dirs
 
 ip_adapter
+
+tests/input
+tests/output

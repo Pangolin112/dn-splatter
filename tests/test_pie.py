@@ -519,8 +519,8 @@ def opencv_seamless_clone(source, target, mask):
         print(f"Using center point: {center}, mask region: ({x},{y},{w},{h})")
         
         # Perform seamless cloning
-        # result = cv2.seamlessClone(source, target, mask_uint8, center, cv2.NORMAL_CLONE)
-        result = cv2.seamlessClone(source, target, mask_uint8, center, cv2.MIXED_CLONE)
+        result = cv2.seamlessClone(source, target, mask_uint8, center, cv2.NORMAL_CLONE)
+        # result = cv2.seamlessClone(source, target, mask_uint8, center, cv2.MIXED_CLONE)
         
         return result
         
@@ -832,8 +832,10 @@ def quick_blend_example():
 
     try:
         # Load your images
-        source = cv2.imread(f"tests/input/{input_dir_name}/source.png")
-        target = cv2.imread(f"tests/input/{input_dir_name}/target.png") 
+        source = cv2.imread(f"tests/input/{input_dir_name}/edges_target.png")
+        # target = cv2.imread(f"tests/input/{input_dir_name}/30006_secret_target_image.png") 
+        # target = cv2.imread(f"tests/input/{input_dir_name}/target.png")
+        target = cv2.imread(f"tests/input/{input_dir_name}/edges_pred_30000.png")
         mask = cv2.imread(f"tests/input/{input_dir_name}/mask.png", cv2.IMREAD_GRAYSCALE)
         
         if source is None or target is None or mask is None:

@@ -28,8 +28,10 @@ from jaxtyping import Float
 import numpy as np
 from tqdm import tqdm
 import torchvision
+import torchvision.transforms as transforms
 from PIL import Image
 from sam2.sam2_image_predictor import SAM2ImagePredictor
+import cv2
 
 from transformers import AutoProcessor, AutoTokenizer, CLIPModel, CLIPVisionModel, CLIPImageProcessor, CLIPVisionModelWithProjection
 from torchvision.transforms import Compose, Resize, CenterCrop, ToTensor, Normalize
@@ -292,8 +294,10 @@ class IP2P_PTD(nn.Module):
         CONSOLE.print("PTDiffusion loaded!")
 
         # load the secret view's original image
+        self.img_origial_path = "data/e9ac2fc517_original/DSC08479_original.png"
+        self.image_original = Image.open(self.img_origial_path)
         # self.image_original = Image.open("data/fb5a96b1a2_original/DSC02791_original.png")
-        self.image_original = Image.open("data/49a82360aa_original/DSC00043_original.png")
+        # self.image_original = Image.open("data/49a82360aa_original/DSC00043_original.png")
         # self.image_original = Image.open("data/0cf2e9402d_original/DSC00356_original.png")
 
         # get the text embedding
@@ -321,6 +325,15 @@ class IP2P_PTD(nn.Module):
         self.ref_name = "face2.jpg"
         # self.ref_name = "yellow_dog.jpg"
         # self.ref_name = "qr_code.png"
+        # self.ref_name = "dancing_lion.png"
+
+        self.t_enc = 1000
+        if self.ref_name == "tum_white.png" or self.ref_name == "tum_black.png":
+            self.add_noise = True #False for normal images, True for sharp images
+        else:
+            self.add_noise = False
+        self.noise_value = 0.05 # default: 0.05
+        self.contrast = 10.0 # default 2.0
 
         # sam 2
         # set predictor
@@ -333,6 +346,22 @@ class IP2P_PTD(nn.Module):
         self.ref_img_path = f'./data/ref_images/{self.ref_name}'
         self.ref_latent_path = f'./outputs/latents/latent_{self.ref_name}.pt'
 
+        # for edge loss 
+        transform = transforms.Compose([
+            transforms.ToPILImage(),  # Convert from numpy array to PIL Image
+            transforms.Resize((self.render_size, self.render_size)),  # Resize to desired dimensions
+            transforms.ColorJitter(contrast=(self.contrast, self.contrast)), # increase contrast
+            transforms.ToTensor(),  # Converts to [0, 1] range and CHW format
+        ])
+        self.ref_img = cv2.imread(self.ref_img_path)
+        self.ref_img_tensor = transform(self.ref_img).unsqueeze(0)  # Add batch dimension (1, C, H, W)
+
+        # img_original = cv2.imread(self.img_origial_path)
+        # original = transform(img_original).unsqueeze(0)
+        # from dn_splatter.utils.edge_loss_utils import SobelFilter
+        # self.original_edges = SobelFilter(ksize=3)(original)
+
+        # get ref_img mask
         img = Image.open(self.ref_img_path).convert('RGB').resize((self.render_size, self.render_size))
 
         with torch.inference_mode(), torch.autocast("cuda", dtype=torch.bfloat16):
@@ -356,16 +385,9 @@ class IP2P_PTD(nn.Module):
             self.mask = masks[max_pixels_idx]
 
         mask_array = (self.mask * 255).astype(np.uint8)
-        import cv2
         cv2.imwrite(f'./outputs/jittered_images/{self.ref_name}_mask.png', mask_array)
 
-        self.t_enc = 1000
-        if self.ref_name == "tum_white.png" or self.ref_name == "tum_black.png":
-            self.add_noise = True #False for normal images, True for sharp images
-        else:
-            self.add_noise = False
-        self.noise_value = 0.05 # default: 0.05
-        self.contrast = 10.0 # default 2.0
+        # start DDIM inversion
         self.DDIM_inversion()
 
         # second secret latent

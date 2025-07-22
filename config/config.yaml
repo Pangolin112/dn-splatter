@@ -114,7 +114,7 @@ secret_edit_rate: 20
 
 interpolate_scale: 1.0 # default: 1.0, no interpolation; 0.0, full interpolation
 
-secret_view_idx: 6
+secret_view_idx: 30 #6
 secret_view_idx_2: 50
 secret_loss_weight: 1.0
 secret_weight: 0.5 # default: 0.5
