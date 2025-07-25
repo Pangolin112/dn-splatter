@@ -6,7 +6,7 @@ import torchvision
 
 
 class SobelFilter(nn.Module):
-    def __init__(self, ksize=3):
+    def __init__(self, ksize=3, use_grayscale=False):
         super(SobelFilter, self).__init__()
         
         # Define Sobel kernels
@@ -43,6 +43,7 @@ class SobelFilter(nn.Module):
         self.register_buffer('weight_y', self.sobel_y)
 
         self.ksize = ksize
+        self.use_grayscale = use_grayscale
         self.padding = ksize // 2
     
     def forward(self, x):
@@ -53,6 +54,10 @@ class SobelFilter(nn.Module):
         Returns:
             Edge magnitude tensor of shape (B, C, H, W)
         """
+        if self.use_grayscale and x.shape[1] == 3:
+            # Convert to grayscale first
+            x = 0.299 * x[:, 0:1] + 0.587 * x[:, 1:2] + 0.114 * x[:, 2:3]
+
         # Ensure weights are on the same device as input
         weight_x = self.weight_x.to(x.device)
         weight_y = self.weight_y.to(x.device)
@@ -76,14 +81,14 @@ class SobelFilter(nn.Module):
 
 
 class SobelEdgeLoss(nn.Module):
-    def __init__(self, loss_type='l1', ksize=3):
+    def __init__(self, loss_type='l1', ksize=3, use_grayscale=False):
         """
         Initialize Sobel Edge Loss
         Args:
             loss_type: 'l1', 'l2', or 'cosine' similarity
         """
         super(SobelEdgeLoss, self).__init__()
-        self.sobel = SobelFilter(ksize)
+        self.sobel = SobelFilter(ksize, use_grayscale)
         self.loss_type = loss_type
         
     def forward(self, pred, target, original_edges, image_dir, step):
@@ -103,10 +108,12 @@ class SobelEdgeLoss(nn.Module):
             edges_pred_np = edges_pred.detach().cpu()
             edges_target_np = edges_target.detach().cpu()
             original_edges_np = original_edges.detach().cpu()
+            added = edges_target_np + original_edges_np
             # Normalize each image individually
             pred_normalized = (edges_pred_np - edges_pred_np.min()) / (edges_pred_np.max() - edges_pred_np.min() + 1e-8)
             target_normalized = (edges_target_np - edges_target_np.min()) / (edges_target_np.max() - edges_target_np.min() + 1e-8)
             original_edges_normalized = (original_edges_np - original_edges_np.min()) / (original_edges_np.max() - original_edges_np.min() + 1e-8)
+            added_normalized = (added - added.min()) / (added.max() - added.min() + 1e-8)
 
             # Save images
             torchvision.utils.save_image(
@@ -120,6 +127,10 @@ class SobelEdgeLoss(nn.Module):
             torchvision.utils.save_image(
                 original_edges_normalized, 
                 f'{image_dir}/original_edges.png'
+            )
+            torchvision.utils.save_image(
+                added_normalized, 
+                f'{image_dir}/added_edges.png'
             )
 
         # add original edge

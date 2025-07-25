@@ -222,7 +222,8 @@ class DNSplatterPipeline(VanillaPipeline):
         self.original_image_secret = self.datamanager.original_cached_train[secret_view_idx]["image"].unsqueeze(dim=0).permute(0, 3, 1, 2)
         self.depth_image_secret = self.datamanager.original_cached_train[secret_view_idx]["depth"] # [bs, h, w]
         # original secret edges
-        self.original_secret_edges = SobelFilter(ksize=3)(self.original_image_secret)
+        use_grayscale = self.config_secret.use_grayscale
+        self.original_secret_edges = SobelFilter(ksize=3, use_grayscale=use_grayscale)(self.original_image_secret)
 
         self.first_iter = True
 
@@ -423,7 +424,7 @@ class DNSplatterPipeline(VanillaPipeline):
         self.lpips_loss_fn = lpips.LPIPS(net='vgg').to(self.config_secret.device)
 
         # edge loss 
-        self.edge_loss_fn = SobelEdgeLoss(loss_type='l1', ksize=3)
+        self.edge_loss_fn = SobelEdgeLoss(loss_type='l1', ksize=3, use_grayscale=use_grayscale)
 
         # second secret view preparation
         secret_view_idx_2 = self.config_secret.secret_view_idx_2
@@ -1765,7 +1766,7 @@ class DNSplatterPipeline(VanillaPipeline):
                 self.first_SequentialEdit = False
 
         return model_outputs, loss_dict, metrics_dict
-        ######################################################
+        #####################################################
 
     # comment this function for 1st stage updating, __IGS2GS + IN2N__seva__
     # def get_train_loss_dict(self, step: int):

@@ -24,7 +24,7 @@ import torchvision
 
 
 class SobelFilter(nn.Module):
-    def __init__(self, ksize=3):
+    def __init__(self, ksize=3, use_grayscale=False):
         super(SobelFilter, self).__init__()
         
         # Define Sobel kernels
@@ -61,6 +61,7 @@ class SobelFilter(nn.Module):
         self.register_buffer('weight_y', self.sobel_y)
 
         self.ksize = ksize
+        self.use_grayscale = use_grayscale
         self.padding = ksize // 2
     
     def forward(self, x):
@@ -71,6 +72,10 @@ class SobelFilter(nn.Module):
         Returns:
             Edge magnitude tensor of shape (B, C, H, W)
         """
+        if self.use_grayscale and x.shape[1] == 3:
+            # Convert to grayscale first
+            x = 0.299 * x[:, 0:1] + 0.587 * x[:, 1:2] + 0.114 * x[:, 2:3]
+
         # Handle different number of channels
         if x.shape[1] > 1:
             # Apply Sobel to each channel separately
@@ -90,14 +95,14 @@ class SobelFilter(nn.Module):
 
 
 class SobelEdgeLoss(nn.Module):
-    def __init__(self, loss_type='l1', ksize=3):
+    def __init__(self, loss_type='l1', ksize=3, use_grayscale=False):
         """
         Initialize Sobel Edge Loss
         Args:
             loss_type: 'l1', 'l2', or 'cosine' similarity
         """
         super(SobelEdgeLoss, self).__init__()
-        self.sobel = SobelFilter(ksize)
+        self.sobel = SobelFilter(ksize, use_grayscale)
         self.loss_type = loss_type
         
     def forward(self, pred, target, original_edges):
@@ -201,6 +206,7 @@ if __name__ == "__main__":
         transforms.Resize((512, 512)),  # Resize to desired dimensions
         transforms.ToTensor(),  # Converts to [0, 1] range and CHW format
     ])
+    # image_source = cv2.imread('tests/input/6/source.png')
     image_source = cv2.imread('tests/input/6/face2.jpg')
     # image_source = cv2.imread('data/ref_images/dancing_lion.png')
     source = transform(image_source).unsqueeze(0)  # Add batch dimension
@@ -224,12 +230,13 @@ if __name__ == "__main__":
     optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
     
     # Create loss function
-    edge_loss_fn = SobelEdgeLoss(loss_type='l1', ksize=3)
+    use_grayscale = False
+    edge_loss_fn = SobelEdgeLoss(loss_type='l1', ksize=3, use_grayscale=use_grayscale)
 
     # add original edge
     image_original = cv2.imread('tests/input/6/target.png')
     original = transform(image_original).unsqueeze(0)  # Add batch dimension
-    original_edges = SobelFilter(ksize=3)(original)
+    original_edges = SobelFilter(ksize=3, use_grayscale=use_grayscale)(original)
     
     # Training loop example
     num_epochs = 500

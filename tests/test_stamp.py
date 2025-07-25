@@ -1,211 +1,371 @@
+import os
 import cv2
 import numpy as np
-from PIL import Image, ImageDraw, ImageFont
-import matplotlib.pyplot as plt
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
 
-class StampEffect:
-    def __init__(self):
-        pass
-    
-    def create_rubber_stamp(self, text, size=(200, 200), 
-                           border_thickness=10, rotation=15):
-        """
-        Create a rubber stamp effect with text
-        """
-        # Create a blank image
-        img = Image.new('RGBA', size, (0, 0, 0, 0))
-        draw = ImageDraw.Draw(img)
+class SobelFilter(nn.Module):
+    def __init__(self, ksize=3, use_grayscale=False):
+        super(SobelFilter, self).__init__()
         
-        # Try to use a bold font, fallback to default
-        try:
-            font = ImageFont.truetype("arial.ttf", 24)
-        except:
-            font = ImageFont.load_default()
-        
-        # Get text dimensions
-        bbox = draw.textbbox((0, 0), text, font=font)
-        text_width = bbox[2] - bbox[0]
-        text_height = bbox[3] - bbox[1]
-        
-        # Calculate position to center text
-        x = (size[0] - text_width) // 2
-        y = (size[1] - text_height) // 2
-        
-        # Draw border (multiple rectangles for thickness)
-        border_color = (180, 0, 0, 255)  # Dark red
-        for i in range(border_thickness):
-            draw.rectangle([i, i, size[0]-1-i, size[1]-1-i], 
-                         outline=border_color, width=1)
-        
-        # Draw text
-        text_color = (200, 0, 0, 255)  # Red
-        draw.text((x, y), text, fill=text_color, font=font)
-        
-        # Rotate the stamp
-        if rotation != 0:
-            img = img.rotate(rotation, expand=True, fillcolor=(0, 0, 0, 0))
-        
-        return img
-    
-    def apply_worn_effect(self, stamp_img, wear_intensity=0.3):
-        """
-        Apply a worn/aged effect to the stamp
-        """
-        # Convert PIL to numpy array
-        stamp_array = np.array(stamp_img)
-        
-        # Create noise for worn effect
-        noise = np.random.random(stamp_array.shape[:2])
-        
-        # Apply wear to alpha channel
-        if stamp_array.shape[2] == 4:  # RGBA
-            alpha = stamp_array[:, :, 3].astype(float) / 255.0
+        # Define Sobel kernels
+        if ksize == 3:
+            sobel_x = torch.tensor([[-1, 0, 1],
+                                    [-2, 0, 2],
+                                    [-1, 0, 1]], dtype=torch.float32)
             
-            # Reduce alpha where noise is high
-            worn_mask = noise > (1 - wear_intensity)
-            alpha[worn_mask] *= np.random.uniform(0.1, 0.7, np.sum(worn_mask))
+            sobel_y = torch.tensor([[-1, -2, -1],
+                                    [ 0,  0,  0],
+                                    [ 1,  2,  1]], dtype=torch.float32)
+        elif ksize == 5:
+            # 5x5 Sobel kernels
+            sobel_x = torch.tensor([[-1, -2, 0, 2, 1],
+                                    [-4, -8, 0, 8, 4],
+                                    [-6, -12, 0, 12, 6],
+                                    [-4, -8, 0, 8, 4],
+                                    [-1, -2, 0, 2, 1]], dtype=torch.float32)
             
-            # Add some random spots
-            spots = np.random.random(stamp_array.shape[:2]) > 0.98
-            alpha[spots] *= 0.2
-            
-            stamp_array[:, :, 3] = (alpha * 255).astype(np.uint8)
-        
-        return Image.fromarray(stamp_array)
-    
-    def stamp_on_image(self, background_path, stamp_img, position, 
-                      opacity=0.7, blend_mode='multiply'):
-        """
-        Apply stamp effect on an image
-        """
-        # Load background image
-        background = Image.open(background_path).convert('RGBA')
-        
-        # Resize stamp if needed
-        stamp_resized = stamp_img.copy()
-        
-        # Adjust stamp opacity
-        if stamp_resized.mode == 'RGBA':
-            # Modify alpha channel for opacity
-            stamp_array = np.array(stamp_resized)
-            stamp_array[:, :, 3] = (stamp_array[:, :, 3] * opacity).astype(np.uint8)
-            stamp_resized = Image.fromarray(stamp_array)
-        
-        # Create a new layer for blending
-        stamp_layer = Image.new('RGBA', background.size, (0, 0, 0, 0))
-        stamp_layer.paste(stamp_resized, position, stamp_resized)
-        
-        # Blend the stamp with background
-        if blend_mode == 'multiply':
-            # Convert to RGB for multiply blend
-            bg_rgb = background.convert('RGB')
-            stamp_rgb = stamp_layer.convert('RGB')
-            
-            # Multiply blend
-            bg_array = np.array(bg_rgb, dtype=np.float32) / 255.0
-            stamp_array = np.array(stamp_rgb, dtype=np.float32) / 255.0
-            
-            # Only apply where stamp has content
-            mask = np.array(stamp_layer)[:, :, 3] > 0
-            result_array = bg_array.copy()
-            
-            for c in range(3):  # RGB channels
-                result_array[:, :, c][mask] = (
-                    bg_array[:, :, c][mask] * stamp_array[:, :, c][mask]
-                )
-            
-            result = Image.fromarray((result_array * 255).astype(np.uint8))
+            sobel_y = torch.tensor([[-1, -4, -6, -4, -1],
+                                    [-2, -8, -12, -8, -2],
+                                    [0, 0, 0, 0, 0],
+                                    [2, 8, 12, 8, 2],
+                                    [1, 4, 6, 4, 1]], dtype=torch.float32)
         else:
-            # Simple alpha composite
-            result = Image.alpha_composite(background, stamp_layer)
+            raise ValueError(f"Unsupported kernel size: {ksize}. Use 3 or 5.")
         
-        return result.convert('RGB')
-    
-    def create_ink_stamp_effect(self, image_path, text, 
-                               position=(50, 50), color=(180, 0, 0)):
-        """
-        Create an ink stamp effect on an image
-        """
-        # Load image
-        img = cv2.imread(image_path)
-        img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        # Reshape for conv2d (out_channels, in_channels, height, width)
+        self.sobel_x = sobel_x.view(1, 1, ksize, ksize)
+        self.sobel_y = sobel_y.view(1, 1, ksize, ksize)
         
-        # Create stamp texture
-        h, w = img_rgb.shape[:2]
-        stamp_mask = np.zeros((h, w), dtype=np.uint8)
-        
-        # Add text
-        font = cv2.FONT_HERSHEY_SIMPLEX
-        font_scale = 1.5
-        thickness = 3
-        
-        # Get text size
-        (text_w, text_h), baseline = cv2.getTextSize(
-            text, font, font_scale, thickness
-        )
-        
-        # Position text
-        x, y = position
-        cv2.putText(stamp_mask, text, (x, y + text_h), 
-                   font, font_scale, 255, thickness)
-        
-        # Create border around text
-        border_size = 20
-        x1, y1 = max(0, x - border_size), max(0, y - border_size)
-        x2, y2 = min(w, x + text_w + border_size), min(h, y + text_h + border_size)
-        cv2.rectangle(stamp_mask, (x1, y1), (x2, y2), 255, 3)
-        
-        # Add noise and imperfections
-        noise = np.random.randint(0, 50, (h, w), dtype=np.uint8)
-        stamp_mask = cv2.subtract(stamp_mask, noise)
-        
-        # Apply Gaussian blur for softer edges
-        stamp_mask = cv2.GaussianBlur(stamp_mask, (3, 3), 0)
-        
-        # Create colored stamp
-        stamp_colored = np.zeros_like(img_rgb)
-        stamp_colored[:, :] = color
-        
-        # Blend with original image
-        stamp_alpha = stamp_mask.astype(np.float32) / 255.0
-        stamp_alpha = np.stack([stamp_alpha] * 3, axis=2)
-        
-        result = img_rgb.astype(np.float32)
-        stamp_effect = stamp_colored.astype(np.float32) * stamp_alpha * 0.7
-        
-        result = result * (1 - stamp_alpha * 0.7) + stamp_effect
-        result = np.clip(result, 0, 255).astype(np.uint8)
-        
-        return result
+        # Register as buffers (not trainable parameters)
+        self.register_buffer('weight_x', self.sobel_x)
+        self.register_buffer('weight_y', self.sobel_y)
 
-# Example usage
-def demo_stamping_effects():
+        self.ksize = ksize
+        self.use_grayscale = use_grayscale
+        self.padding = ksize // 2
+    
+    def forward(self, x):
+        """
+        Apply Sobel filter to input tensor
+        Args:
+            x: Input tensor of shape (B, C, H, W)
+        Returns:
+            Edge magnitude tensor of shape (B, C, H, W)
+        """
+        if self.use_grayscale and x.shape[1] == 3:
+            # Convert to grayscale first
+            x = 0.299 * x[:, 0:1] + 0.587 * x[:, 1:2] + 0.114 * x[:, 2:3]
+
+        # Ensure weights are on the same device as input
+        weight_x = self.weight_x.to(x.device)
+        weight_y = self.weight_y.to(x.device)
+
+        # Handle different number of channels
+        if x.shape[1] > 1:
+            # Apply Sobel to each channel separately
+            edges = []
+            for i in range(x.shape[1]):
+                channel = x[:, i:i+1, :, :]
+                gx = F.conv2d(channel, weight_x, padding=self.padding)
+                gy = F.conv2d(channel, weight_y, padding=self.padding)
+                edge = torch.sqrt(gx**2 + gy**2 + 1e-6)  # Add small epsilon for numerical stability
+                edges.append(edge)
+            return torch.cat(edges, dim=1)
+        else:
+            # Single channel
+            gx = F.conv2d(x, weight_x, padding=self.padding)
+            gy = F.conv2d(x, weight_y, padding=self.padding)
+            return torch.sqrt(gx**2 + gy**2 + 1e-6)
+
+
+def apply_sobel_opencv_additive(stamp_img, base_img, edge_strength=0.5):
+    """Apply Sobel filter using OpenCV - additive mode to preserve brightness"""
+    # Convert to grayscale for edge detection
+    gray_stamp = cv2.cvtColor(stamp_img, cv2.COLOR_BGR2GRAY)
+    
+    # Apply Sobel operator
+    sobel_x = cv2.Sobel(gray_stamp, cv2.CV_64F, 1, 0, ksize=3)
+    sobel_y = cv2.Sobel(gray_stamp, cv2.CV_64F, 0, 1, ksize=3)
+    
+    # Calculate magnitude
+    magnitude = np.sqrt(sobel_x**2 + sobel_y**2)
+    
+    # Normalize edges
+    magnitude = magnitude / (magnitude.max() + 1e-6) * 255 * edge_strength
+    
+    # Convert to 3-channel
+    magnitude_3ch = cv2.cvtColor(magnitude.astype(np.uint8), cv2.COLOR_GRAY2BGR)
+    
+    # Add edges to base image (not blend) - this preserves brightness
+    rows, cols = stamp_img.shape[:2]
+    result = base_img.copy()
+    result[:rows, :cols] = np.clip(
+        base_img[:rows, :cols].astype(np.float32) + magnitude_3ch.astype(np.float32),
+        0, 255
+    ).astype(np.uint8)
+    
+    return result
+
+
+def apply_laplacian_additive(stamp_img, base_img, edge_strength=0.5):
+    """Apply Laplacian filter - additive mode"""
+    # Convert to grayscale
+    gray_stamp = cv2.cvtColor(stamp_img, cv2.COLOR_BGR2GRAY)
+    
+    # Apply Laplacian
+    laplacian = cv2.Laplacian(gray_stamp, cv2.CV_64F, ksize=3)
+    
+    # Take absolute value and normalize
+    laplacian = np.abs(laplacian)
+    laplacian = laplacian / (laplacian.max() + 1e-6) * 255 * edge_strength
+    
+    # Convert to 3-channel
+    laplacian_3ch = cv2.cvtColor(laplacian.astype(np.uint8), cv2.COLOR_GRAY2BGR)
+    
+    # Add to base image
+    rows, cols = stamp_img.shape[:2]
+    result = base_img.copy()
+    result[:rows, :cols] = np.clip(
+        base_img[:rows, :cols].astype(np.float32) + laplacian_3ch.astype(np.float32),
+        0, 255
+    ).astype(np.uint8)
+    
+    return result
+
+
+def apply_canny_additive(stamp_img, base_img, low_threshold=50, high_threshold=150, edge_strength=0.5):
+    """Apply Canny edge detection - additive mode"""
+    # Convert to grayscale
+    gray_stamp = cv2.cvtColor(stamp_img, cv2.COLOR_BGR2GRAY)
+    
+    # Apply Gaussian blur to reduce noise
+    blurred = cv2.GaussianBlur(gray_stamp, (5, 5), 1.4)
+    
+    # Apply Canny edge detection
+    edges = cv2.Canny(blurred, low_threshold, high_threshold)
+    
+    # Scale edges
+    edges = (edges * edge_strength).astype(np.uint8)
+    
+    # Convert to 3-channel
+    edges_3ch = cv2.cvtColor(edges, cv2.COLOR_GRAY2BGR)
+    
+    # Add to base image
+    rows, cols = stamp_img.shape[:2]
+    result = base_img.copy()
+    result[:rows, :cols] = np.clip(
+        base_img[:rows, :cols].astype(np.float32) + edges_3ch.astype(np.float32),
+        0, 255
+    ).astype(np.uint8)
+    
+    return result
+
+
+def apply_emboss_filter_additive(stamp_img, base_img, strength=0.3):
+    """Apply custom emboss filter - additive mode"""
+    # Define emboss kernel
+    emboss_kernel = np.array([[-2, -1,  0],
+                              [-1,  1,  1],
+                              [ 0,  1,  2]], dtype=np.float32)
+    
+    # Apply filter to each channel
+    embossed = np.zeros_like(stamp_img, dtype=np.float32)
+    for i in range(3):
+        embossed[:, :, i] = cv2.filter2D(stamp_img[:, :, i], -1, emboss_kernel)
+    
+    # Extract only the positive edges (bright parts)
+    embossed = np.maximum(embossed, 0) * strength
+    
+    # Add to base image
+    rows, cols = stamp_img.shape[:2]
+    result = base_img.copy()
+    result[:rows, :cols] = np.clip(
+        base_img[:rows, :cols].astype(np.float32) + embossed,
+        0, 255
+    ).astype(np.uint8)
+    
+    return result
+
+
+def apply_prewitt_filter_additive(stamp_img, base_img, edge_strength=0.5):
+    """Apply Prewitt edge detection filter - additive mode"""
+    # Prewitt kernels
+    prewitt_x = np.array([[-1, 0, 1],
+                          [-1, 0, 1],
+                          [-1, 0, 1]], dtype=np.float32)
+    
+    prewitt_y = np.array([[-1, -1, -1],
+                          [ 0,  0,  0],
+                          [ 1,  1,  1]], dtype=np.float32)
+    
+    # Convert to grayscale
+    gray_stamp = cv2.cvtColor(stamp_img, cv2.COLOR_BGR2GRAY)
+    
+    # Apply Prewitt filters
+    edge_x = cv2.filter2D(gray_stamp, cv2.CV_32F, prewitt_x)
+    edge_y = cv2.filter2D(gray_stamp, cv2.CV_32F, prewitt_y)
+    
+    # Calculate magnitude
+    magnitude = np.sqrt(edge_x**2 + edge_y**2)
+    magnitude = magnitude / (magnitude.max() + 1e-6) * 255 * edge_strength
+    
+    # Convert to 3-channel
+    magnitude_3ch = cv2.cvtColor(magnitude.astype(np.uint8), cv2.COLOR_GRAY2BGR)
+    
+    # Add to base image
+    rows, cols = stamp_img.shape[:2]
+    result = base_img.copy()
+    result[:rows, :cols] = np.clip(
+        base_img[:rows, :cols].astype(np.float32) + magnitude_3ch.astype(np.float32),
+        0, 255
+    ).astype(np.uint8)
+    
+    return result
+
+
+def apply_sobel_torch_additive(stamp_img, base_img, edge_strength=0.5):
+    """Apply Sobel filter using PyTorch - additive mode"""
+    # Convert images to torch tensors
+    stamp_tensor = torch.from_numpy(stamp_img.transpose(2, 0, 1)).float().unsqueeze(0) / 255.0
+    
+    # Create Sobel filter instance
+    sobel = SobelFilter(ksize=3, use_grayscale=True)
+    
+    # Apply Sobel filter
+    with torch.no_grad():
+        edges = sobel(stamp_tensor)
+    
+    # Convert back to numpy and normalize
+    edges_np = edges.squeeze(0).squeeze(0).numpy()
+    edges_np = edges_np / (edges_np.max() + 1e-6) * 255 * edge_strength
+    edges_np = edges_np.astype(np.uint8)
+    
+    # Convert to 3-channel
+    edges_3ch = cv2.cvtColor(edges_np, cv2.COLOR_GRAY2BGR)
+    
+    # Add to base image
+    rows, cols = stamp_img.shape[:2]
+    result = base_img.copy()
+    result[:rows, :cols] = np.clip(
+        base_img[:rows, :cols].astype(np.float32) + edges_3ch.astype(np.float32),
+        0, 255
+    ).astype(np.uint8)
+    
+    return result
+
+
+def apply_original_gradient(stamp_img, base_img, alpha=1.0):
+    """Original horizontal gradient method"""
+    rows, cols = stamp_img.shape[:2]
+    result = base_img.copy()
+    
+    # Vectorized operation
+    gradient = stamp_img[:rows, 1:cols].astype(np.float32) - stamp_img[:rows, :cols-1].astype(np.float32)
+    
+    # Add gradient to base image (not replace)
+    result[:rows, :cols-1] = np.clip(
+        base_img[:rows, :cols-1].astype(np.float32) + gradient * alpha,
+        0, 255
+    ).astype(np.uint8)
+    
+    return result
+
+
+def apply_edge_enhance(stamp_img, base_img, method='sobel', edge_strength=0.5):
     """
-    Demonstrate various stamping effects
+    Apply edge enhancement while preserving original brightness
+    
+    Args:
+        stamp_img: Reference/stamp image
+        base_img: Base image to apply edges to
+        method: Edge detection method ('sobel', 'laplacian', 'canny')
+        edge_strength: Strength of edges (0-1)
     """
-    stamper = StampEffect()
+    # Convert to grayscale for edge detection
+    gray_stamp = cv2.cvtColor(stamp_img, cv2.COLOR_BGR2GRAY)
     
-    # Create a rubber stamp
-    print("Creating rubber stamp...")
-    stamp = stamper.create_rubber_stamp("APPROVED", size=(150, 150), rotation=20)
+    if method == 'sobel':
+        # Sobel edge detection
+        grad_x = cv2.Sobel(gray_stamp, cv2.CV_64F, 1, 0, ksize=3)
+        grad_y = cv2.Sobel(gray_stamp, cv2.CV_64F, 0, 1, ksize=3)
+        edges = np.sqrt(grad_x**2 + grad_y**2)
+    elif method == 'laplacian':
+        edges = np.abs(cv2.Laplacian(gray_stamp, cv2.CV_64F))
+    elif method == 'canny':
+        edges = cv2.Canny(gray_stamp, 50, 150).astype(np.float64)
+    else:
+        raise ValueError(f"Unknown method: {method}")
     
-    # Apply worn effect
-    worn_stamp = stamper.apply_worn_effect(stamp, wear_intensity=0.4)
+    # Normalize edges to 0-1 range
+    if edges.max() > 0:
+        edges = edges / edges.max()
     
-    # Save stamps
-    stamp.save('rubber_stamp.png')
-    worn_stamp.save('worn_stamp.png')
-    print("Stamps saved as 'rubber_stamp.png' and 'worn_stamp.png'")
+    # Convert edges to color (white edges)
+    edges_color = np.stack([edges * 255] * 3, axis=-1) * edge_strength
     
-    # Note: For applying stamps to images, you would need actual image files
-    # Example of how to use:
-    # result = stamper.stamp_on_image('document.jpg', worn_stamp, (100, 100))
-    # result.save('stamped_document.jpg')
+    # Add edges to original image
+    rows, cols = stamp_img.shape[:2]
+    result = base_img.copy()
+    result[:rows, :cols] = np.clip(
+        base_img[:rows, :cols].astype(np.float32) + edges_color,
+        0, 255
+    ).astype(np.uint8)
     
-    # Apply stamp to sample document
-    result = stamper.stamp_on_image('tests/input/6/target.png', worn_stamp, (200, 150))
-    result.save('tests/output/6/target_stamp.png')
-    print("Sample stamped document saved as 'tests/output/6/target_stamp.png'")
+    return result
+
+
+def main():
+    # Read images
+    stamp_img = cv2.imread('data/ref_images/face1.jpg')
+    base_img = cv2.imread('data/e9ac2fc517_original/DSC08479_original.png')
+    
+    if stamp_img is None or base_img is None:
+        print("Error loading images")
+        return
+
+    # set edge strength
+    edge_strength = 4.0
+    
+    # Apply different edge detection methods with brightness preservation
+    results = {}
+    
+    # 1. Original method (horizontal gradient) - additive version
+    results['Original_Additive'] = apply_original_gradient(stamp_img, base_img, alpha=edge_strength)
+    
+    # 2. Sobel filter (OpenCV) - additive
+    results['Sobel_OpenCV_Additive'] = apply_sobel_opencv_additive(stamp_img, base_img, edge_strength=edge_strength)
+    
+    # 3. Laplacian filter - additive
+    results['Laplacian_Additive'] = apply_laplacian_additive(stamp_img, base_img, edge_strength=edge_strength)
+    
+    # 4. Canny edge detection - additive
+    results['Canny_Additive'] = apply_canny_additive(stamp_img, base_img, edge_strength=edge_strength)
+    
+    # 5. Emboss filter - additive
+    results['Emboss_Additive'] = apply_emboss_filter_additive(stamp_img, base_img, strength=edge_strength)
+    
+    # 6. Prewitt filter - additive
+    results['Prewitt_Additive'] = apply_prewitt_filter_additive(stamp_img, base_img, edge_strength=edge_strength)
+    
+    # 7. Sobel filter (PyTorch) - additive
+    results['Sobel_PyTorch_Additive'] = apply_sobel_torch_additive(stamp_img, base_img, edge_strength=edge_strength)
+    
+    # 8. Edge enhance methods
+    results['Edge_Enhance_Sobel'] = apply_edge_enhance(stamp_img, base_img, method='sobel', edge_strength=edge_strength)
+    results['Edge_Enhance_Laplacian'] = apply_edge_enhance(stamp_img, base_img, method='laplacian', edge_strength=edge_strength)
+    results['Edge_Enhance_Canny'] = apply_edge_enhance(stamp_img, base_img, method='canny', edge_strength=edge_strength)
+
+    # Save all results
+    output_dir = f'tests/output/stamp_results_bright_{edge_strength}'
+    os.makedirs(output_dir, exist_ok=True)
+    
+    for name, result in results.items():
+        output_path = os.path.join(output_dir, f"{name}.png")
+        cv2.imwrite(output_path, result)
+        print(f"Saved: {output_path}")
+
 
 if __name__ == "__main__":
-    demo_stamping_effects()
+    main()
