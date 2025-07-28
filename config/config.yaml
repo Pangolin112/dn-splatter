@@ -80,7 +80,7 @@ seed: 99
 
 # prompts
 prompt_1: "a castle"
-prompt_2: "make it chinese style"
+prompt_2: "make it baroque style"
 a_prompt: ", best quality, high quality, extremely detailed, good geometry, high-res photo"
 n_prompt: "deformed, extra digit, fewer digits, cropped, worst quality, low quality, smoke, shading, lighting, lumination, shadow, text in image, watermarks"
 
@@ -138,3 +138,6 @@ l1_weight: 0.5 # default: 0.5, weight for L1 loss
 
 # edge loss
 use_grayscale: True # default: True, use grayscale for edge detection; False, use RGB edges
+
+# ref loss
+ref_loss_weight: 0.2 # default: 0.2, weight for ref loss, a content loss of ref image added to the original rgb (L1 + lpips loss
