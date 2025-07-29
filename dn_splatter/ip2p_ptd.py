@@ -321,11 +321,12 @@ class IP2P_PTD(nn.Module):
         # generate the ref_latent
         # self.ref_name = "tum_white.png"
         # self.ref_name = "tum_black.png"
-        self.ref_name = "face1.jpg"
+        # self.ref_name = "face1.jpg"
         # self.ref_name = "face2.jpg"
         # self.ref_name = "yellow_dog.jpg"
         # self.ref_name = "qr_code.png"
         # self.ref_name = "dancing_lion.png"
+        self.ref_name = "space_ship.png"
 
         self.t_enc = 1000
         if self.ref_name == "tum_white.png" or self.ref_name == "tum_black.png":

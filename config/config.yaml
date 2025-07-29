@@ -141,3 +141,11 @@ use_grayscale: True # default: True, use grayscale for edge detection; False, us
 
 # ref loss
 ref_loss_weight: 0.2 # default: 0.2, weight for ref loss, a content loss of ref image added to the original rgb (L1 + lpips loss
+
+# camera pose optimization
+pose_learning_rate: 1e-3
+num_pose_iterations: 5000
+translation_reg_weight: 1e-4
+rotation_reg_weight: 1e-4
+max_translation_offset: 0.5  # Adjust based on your scene scale
+max_rotation_offset: 0.5     # Radians
