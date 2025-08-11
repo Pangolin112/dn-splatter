@@ -22,6 +22,7 @@ from encoding.datasets import test_batchify_fn
 from encoding.models.sseg import BaseNet
 from lseg.additional_utils.models import LSeg_MultiEvalModule
 from lseg.modules.lseg_module import LSegModule
+from lseg.modules.models.lseg_net import LSegNet
 
 import math
 import types
@@ -216,7 +217,22 @@ class Options:
         args.cuda = not args.no_cuda and torch.cuda.is_available()
         print(args)
         return args
-    
+
+
+def get_labels(dataset):
+    labels = []
+    path = 'label_files/{}_objectInfo150.txt'.format(dataset)
+    assert os.path.exists(path), '*** Error : {} not exist !!!'.format(path)
+    f = open(path, 'r') 
+    lines = f.readlines()      
+    for line in lines: 
+        label = line.strip().split(',')[-1].split(';')[0]
+        labels.append(label)
+    f.close()
+    if dataset in ['ade20k']:
+        labels = labels[1:]
+    return labels
+
 
 def get_new_pallete(num_cls):
     n = num_cls
@@ -257,7 +273,6 @@ def lseg_module_init():
 
     torch.manual_seed(args.seed)
     args.test_batch_size = 1 
-    alpha=0.5
         
     args.scale_inv = False
     args.widehead = True
@@ -266,59 +281,69 @@ def lseg_module_init():
     args.weights = 'lseg/checkpoints/demo_e200.ckpt'
     args.ignore_index = 255
 
-    module = LSegModule.load_from_checkpoint(
-        checkpoint_path=args.weights,
-        data_path=args.data_path,
-        dataset=args.dataset,
+    # module = LSegModule.load_from_checkpoint(
+    #     checkpoint_path=args.weights,
+    #     data_path=args.data_path,
+    #     dataset=args.dataset,
+    #     backbone=args.backbone,
+    #     aux=args.aux,
+    #     num_features=256,
+    #     aux_weight=0,
+    #     se_loss=False,
+    #     se_weight=0,
+    #     base_lr=0,
+    #     batch_size=1,
+    #     max_epochs=0,
+    #     ignore_index=args.ignore_index,
+    #     dropout=0.0,
+    #     scale_inv=args.scale_inv,
+    #     augment=False,
+    #     no_batchnorm=False,
+    #     widehead=args.widehead,
+    #     widehead_hr=args.widehead_hr,
+    #     map_locatin="cpu",
+    #     arch_option=0,
+    #     block_depth=0,
+    #     activation='lrelu',
+    # )
+
+    # # model
+    # if isinstance(module.net, BaseNet):
+    #     model = module.net
+    # else:
+    #     model = module
+
+    checkpoint = torch.load(args.weights, weights_only=False)
+
+    labels = get_labels('ade20k')
+
+    model = LSegNet(
+        labels=labels,
         backbone=args.backbone,
-        aux=args.aux,
-        num_features=256,
-        aux_weight=0,
-        se_loss=False,
-        se_weight=0,
-        base_lr=0,
-        batch_size=1,
-        max_epochs=0,
-        ignore_index=args.ignore_index,
-        dropout=0.0,
-        scale_inv=args.scale_inv,
-        augment=False,
-        no_batchnorm=False,
-        widehead=args.widehead,
-        widehead_hr=args.widehead_hr,
-        map_locatin="cpu",
+        features=256,
+        crop_size=512,
         arch_option=0,
         block_depth=0,
         activation='lrelu',
     )
-
-    input_transform = module.val_transform
-
-    # dataloader
-    loader_kwargs = (
-        {"num_workers": args.workers, "pin_memory": True} if args.cuda else {}
-    )
-
-    # model
-    if isinstance(module.net, BaseNet):
-        model = module.net
-    else:
-        model = module
+    
+    # Load the state dict from the checkpoint
+    if 'state_dict' in checkpoint:
+        state_dict = checkpoint['state_dict']
+        # Remove 'net.' prefix if present
+        new_state_dict = {}
+        for k, v in state_dict.items():
+            if k.startswith('net.'):
+                new_state_dict[k[4:]] = v  # Remove 'net.' prefix
+            else:
+                new_state_dict[k] = v
+        model.load_state_dict(new_state_dict, strict=False)
         
     model = model.eval()
-    model = model.cpu()
-    scales = (
-        [0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.25]
-        if args.dataset == "citys"
-        else [0.5, 0.75, 1.0, 1.25, 1.5, 1.75]
-    )  
+    # model = model.cpu()
+    model = model.cuda()
 
     model.mean = [0.5, 0.5, 0.5]
     model.std = [0.5, 0.5, 0.5]
-
-    evaluator = LSeg_MultiEvalModule(
-        model, scales=scales, flip=True
-    ).cuda()
-    evaluator.eval()
 
     return model

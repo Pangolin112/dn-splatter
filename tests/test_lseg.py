@@ -59,7 +59,8 @@ transform = transforms.Compose(
         transforms.Normalize([0.5, 0.5, 0.5], [0.5, 0.5, 0.5]),
     ]
 )
-image = transform(image).unsqueeze(0)
+image = transform(image).unsqueeze(0) # [1, 3, 512, 512]
+
 img = image[0].permute(1,2,0)
 img = img * 0.5 + 0.5
 plt.imshow(img)
