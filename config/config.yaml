@@ -104,17 +104,17 @@ async_ahead_steps: 50 #20 # default: 0, no async ahead; [-10, 10] (original PTD)
 
 # IP2P
 t_dec: 20
-image_guidance_scale_ip2p: 1.0 # decrease the cs would create better results w depth condition
+image_guidance_scale_ip2p: 1.3 #1.0 # decrease the cs would create better results w depth condition
 image_guidance_scale_ip2p_ptd: 1.0 #1.3 # increase the cs would make the results more similar to the input image 
 lower_bound: 0.98 # the higher the better
 upper_bound: 0.99 # the higher the better
 
 edit_rate: 10 # higher value, faster training, less editing
-secret_edit_rate: 20
+secret_edit_rate: 10 #20
 
 interpolate_scale: 1.0 # default: 1.0, no interpolation; 0.0, full interpolation
 
-secret_view_idx: 30 #6
+secret_view_idx: 6 #30 for scene 0cf2e9402d #6
 secret_view_idx_2: 50
 secret_loss_weight: 1.0
 secret_weight: 0.5 # default: 0.5
@@ -140,12 +140,13 @@ l1_weight: 0.5 # default: 0.5, weight for L1 loss
 use_grayscale: True # default: True, use grayscale for edge detection; False, use RGB edges
 
 # ref loss
-ref_loss_weight: 0.2 # default: 0.2, weight for ref loss, a content loss of ref image added to the original rgb (L1 + lpips loss
+ref_loss_weight: 2.0 #0.2 # default: 0.2, weight for ref loss, a content loss of ref image added to the original rgb (L1 + lpips loss
+non_secret_loss_weight: 1.0 # loss weight for non-secret view updating, a lower value avoids "void" areas in the secret view.
 
 # camera pose optimization
-pose_learning_rate: 1e-3
-num_pose_iterations: 5000
+pose_learning_rate: 5e-3
+num_pose_iterations: 1000
 translation_reg_weight: 1e-4
 rotation_reg_weight: 1e-4
-max_translation_offset: 0.5  # Adjust based on your scene scale
-max_rotation_offset: 0.5     # Radians
+max_translation_offset: 0.3  # Adjust based on your scene scale
+max_rotation_offset: 0.3     # Radians

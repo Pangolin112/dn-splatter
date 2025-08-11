@@ -184,3 +184,6 @@ ip_adapter
 
 tests/input
 tests/output
+
+ADEChallengeData2016
+lseg/checkpoints

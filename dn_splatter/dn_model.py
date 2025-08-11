@@ -647,11 +647,17 @@ class DNSplatterModel(SplatfactoModel):
 
         # ######### add LPIPS loss ##############
         lpips_lambda = 0.2
+        # lpips_lambda = 0.4
         main_loss = main_loss + lpips_lambda * self.lpips_loss_fn(
             (pred_img.permute(2, 0, 1).unsqueeze(0) * 2 - 1).clamp(-1, 1),
             (gt_img.permute(2, 0, 1).unsqueeze(0).to(torch.device("cuda")) * 2 - 1).clamp(-1, 1),
         ).squeeze()
         # ######### add LPIPS loss ##############
+
+        # for 2nd stage training, comment for the 3rd stage
+        #########################################
+        # main_loss = 0.0
+        #########################################
 
         sensor_depth_gt = None
         mono_depth_gt = None

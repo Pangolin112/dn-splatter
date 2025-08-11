@@ -54,6 +54,8 @@ import lpips
 import cv2
 from tqdm import tqdm
 
+import matplotlib.pyplot as plt
+
 from dn_splatter.ip2p_ptd import IP2P_PTD
 
 from dn_splatter.ip2p_depth import InstructPix2Pix_depth
@@ -181,7 +183,7 @@ class DNSplatterPipeline(VanillaPipeline):
         # which image index we are editing
         self.curr_edit_idx = 0
         # whether we are doing regular GS updates or editing images
-        self.makeSquentialEdits = False
+        self.makeSequentialEdits = False
         
         # whether we are doing the first sequential edition
         self.first_SequentialEdit = True
@@ -232,34 +234,6 @@ class DNSplatterPipeline(VanillaPipeline):
 
         # edge loss 
         self.edge_loss_fn = SobelEdgeLoss(loss_type='l1', ksize=3, use_grayscale=self.config_secret.use_grayscale)
-
-        # # find the best secret view that align with the refence image
-        # current_secret_idx = 0
-        # current_lpips_score = float("inf")
-        # for idx in tqdm(range(len(self.datamanager.cached_train))):
-        #     camera, data = self.datamanager.next_train_idx(idx)
-        #     model_outputs = self.model(camera)
-
-        #     # compute lpips value
-        #     lpips_score = self.lpips_loss_fn(
-        #         (model_outputs["rgb"].permute(2, 0, 1).unsqueeze(0) * 2 - 1).clamp(-1, 1),
-        #         self.ref_image_tensor
-        #     ).item()
-
-        #     if lpips_score < current_lpips_score:
-        #         current_lpips_score = lpips_score
-        #         current_secret_idx = idx
-
-        # self.bset_secret_view_idx = current_secret_idx
-        # camera, data = self.datamanager.next_train_idx(self.bset_secret_view_idx)
-        # model_outputs = self.model(camera)
-        # rendered_image = model_outputs["rgb"].detach().unsqueeze(dim=0).permute(0, 3, 1, 2)
-        # image_dir = Path("outputs/images_best_secret_view")
-        # if not image_dir.exists():
-        #     image_dir.mkdir(parents=True, exist_ok=True)
-        # save_image(rendered_image, image_dir / f"best_secret_view_{self.bset_secret_view_idx}.png")
-
-        # CONSOLE.print(f"Best secret view index: {self.bset_secret_view_idx} with LPIPS score: {current_lpips_score}")
 
         # secret data preparation
         secret_view_idx = self.config_secret.secret_view_idx
@@ -470,42 +444,6 @@ class DNSplatterPipeline(VanillaPipeline):
         self.trainer = attrs.trainer
         # now return whatever callbacks the base class wants
         return super().get_training_callbacks(attrs)
-    
-    # need to make sure the gradients flow
-    # def _axis_angle_to_rotation_matrix(self, axis_angle):
-    #     """Convert axis-angle representation to rotation matrix."""
-    #     angle = torch.norm(axis_angle)
-        
-    #     # Create identity matrix
-    #     I = torch.eye(3, device=axis_angle.device, dtype=axis_angle.dtype)
-        
-    #     if angle < 1e-6:
-    #         # For small angles, use first-order approximation
-    #         # Build the skew-symmetric matrix without using torch.tensor
-    #         K = torch.zeros(3, 3, device=axis_angle.device, dtype=axis_angle.dtype)
-    #         K[0, 1] = -axis_angle[2]
-    #         K[0, 2] = axis_angle[1]
-    #         K[1, 0] = axis_angle[2]
-    #         K[1, 2] = -axis_angle[0]
-    #         K[2, 0] = -axis_angle[1]
-    #         K[2, 1] = axis_angle[0]
-    #         return I + K
-        
-    #     # Normalize to get axis
-    #     axis = axis_angle / angle
-        
-    #     # Build skew-symmetric matrix K without using torch.tensor
-    #     K = torch.zeros(3, 3, device=axis_angle.device, dtype=axis_angle.dtype)
-    #     K[0, 1] = -axis[2]
-    #     K[0, 2] = axis[1]
-    #     K[1, 0] = axis[2]
-    #     K[1, 2] = -axis[0]
-    #     K[2, 0] = -axis[1]
-    #     K[2, 1] = axis[0]
-        
-    #     # Rodrigues' rotation formula
-    #     R = I + torch.sin(angle) * K + (1 - torch.cos(angle)) * torch.matmul(K, K)
-    #     return R
 
     def _axis_angle_to_rotation_matrix(self, axis_angle):
         """Convert axis-angle to rotation matrix using matrix exponential."""
@@ -521,228 +459,642 @@ class DNSplatterPipeline(VanillaPipeline):
         # Use matrix exponential (more stable for gradients)
         R = torch.matrix_exp(K)
         return R
-    
-    # __camera_pose_offset_updating__
+
+    # 2nd stage: secret + non-secret loss + masked fighting (ref, original) loss
+    # uncomment the main_loss = 0.0 on line 659 in dn_model.py before training
+    # def get_train_loss_dict(self, step: int):
+    #     base_dir = self.trainer.base_dir
+    #     image_dir = base_dir / f"images_only_secret_loss_fighting_ref_original_{self.config_secret.image_guidance_scale_ip2p_ptd}_{self.config_secret.secret_edit_rate}_non_secret_{self.config_secret.image_guidance_scale_ip2p}_{self.config_secret.edit_rate}"
+    #     if not image_dir.exists():
+    #         image_dir.mkdir(parents=True, exist_ok=True)
+
+    #     # non-editing steps loss computing
+    #     camera, data = self.datamanager.next_train(step)
+    #     model_outputs = self.model(camera)
+    #     metrics_dict = self.model.get_metrics_dict(model_outputs, data)
+    #     loss_dict = self.model.get_loss_dict(model_outputs, data, metrics_dict)
+
+    #     # update the secret view every secret_edit_rate steps
+    #     if step % self.config_secret.secret_edit_rate == 0:
+    #         model_outputs_secret = self.model(self.camera_secret)
+    #         metrics_dict_secret = self.model.get_metrics_dict(model_outputs_secret, self.data_secret)
+    #         loss_dict_secret = self.model.get_loss_dict(model_outputs_secret, self.data_secret, metrics_dict_secret) # l1, lpips, regularization
+
+    #         # compute masked lpips value
+    #         mask_np = self.ip2p_ptd.mask
+    #         # Convert mask to tensor and ensure it's the right shape/device
+    #         mask_tensor = torch.from_numpy(mask_np).float()
+    #         if len(mask_tensor.shape) == 2:
+    #             mask_tensor = mask_tensor.unsqueeze(0)  # Add channel dimension
+    #         if mask_tensor.shape[0] == 1:
+    #             mask_tensor = mask_tensor.repeat(3, 1, 1)  # Repeat for RGB channels
+    #         mask_tensor = mask_tensor.unsqueeze(0)  # Add batch dimension
+    #         mask_tensor = mask_tensor.to(self.ref_image_tensor.device)
+
+    #         # Prepare model output
+    #         model_rgb_secret = (model_outputs_secret["rgb"].permute(2, 0, 1).unsqueeze(0) * 2 - 1).clamp(-1, 1)
+
+    #         # Apply mask to both images
+    #         masked_model_rgb = model_rgb_secret * mask_tensor
+    #         masked_ref_image = self.ref_image_tensor * mask_tensor
+
+    #         # ref loss, a content loss of ref image added to the original rgb (L1 + lpips loss)
+    #         ref_loss = self.lpips_loss_fn(
+    #             masked_model_rgb,
+    #             masked_ref_image
+    #         ).squeeze() # need to add squeeze to make the ref_loss a scalar instead of a tensor
+    #         ref_l1_loss = torch.nn.functional.l1_loss(
+    #             masked_model_rgb,
+    #             masked_ref_image
+    #         )
+    #         loss_dict_secret["main_loss"] += self.config_secret.ref_loss_weight * ref_loss + ref_l1_loss
+
+    #         # edge loss
+    #         # rendered_image_secret = model_outputs_secret["rgb"].unsqueeze(0).permute(0, 3, 1, 2) # don't detach the output when we want the grad to backpropagate
+    #         # edge_loss = self.edge_loss_fn(
+    #         #     rendered_image_secret.to(self.config_secret.device), 
+    #         #     self.ip2p_ptd.ref_img_tensor.to(self.config_secret.device),
+    #         #     self.original_secret_edges.to(self.config_secret.device),
+    #         #     image_dir,
+    #         #     step
+    #         # )
+    #         # loss_dict_secret["main_loss"] += edge_loss
+
+    #         if step % 100 == 0:
+    #             image_save_secret = torch.cat([model_outputs_secret["rgb"].detach().permute(2, 0, 1).unsqueeze(0), ((masked_ref_image + 1) / 2).to(self.config_secret.device), self.original_image_secret.to(self.config_secret.device)])
+    #             save_image((image_save_secret).clamp(0, 1), image_dir / f'{step}_secret_list.png')
+
+    #         # put the secret metrics and loss into the main dict
+    #         for k, v in metrics_dict_secret.items():
+    #             metrics_dict[f"secret_{k}"] = v
+    #         for k, v in loss_dict_secret.items():
+    #             loss_dict[f"secret_{k}"] = v
+
+    #     return model_outputs, loss_dict, metrics_dict
+        ######################################################
+
+    # 2nd stage: only masked fighting (ref, original) loss
+    # def get_train_loss_dict(self, step: int):
+    #     base_dir = self.trainer.base_dir
+    #     image_dir = base_dir / f"images_only_secret_loss_fighting_ref_original_{self.config_secret.image_guidance_scale_ip2p_ptd}_{self.config_secret.secret_edit_rate}_non_secret_{self.config_secret.image_guidance_scale_ip2p}_{self.config_secret.edit_rate}"
+    #     if not image_dir.exists():
+    #         image_dir.mkdir(parents=True, exist_ok=True)
+
+    #     model_outputs_secret = self.model(self.camera_secret)
+    #     metrics_dict_secret = self.model.get_metrics_dict(model_outputs_secret, self.data_secret)
+    #     loss_dict_secret = self.model.get_loss_dict(model_outputs_secret, self.data_secret, metrics_dict_secret) # l1 + lpips
+    #     loss_dict_secret["main_loss"] = 0.0
+
+    #     # compute masked lpips value
+    #     mask_np = self.ip2p_ptd.mask
+    #     # Convert mask to tensor and ensure it's the right shape/device
+    #     mask_tensor = torch.from_numpy(mask_np).float()
+    #     if len(mask_tensor.shape) == 2:
+    #         mask_tensor = mask_tensor.unsqueeze(0)  # Add channel dimension
+    #     if mask_tensor.shape[0] == 1:
+    #         mask_tensor = mask_tensor.repeat(3, 1, 1)  # Repeat for RGB channels
+    #     mask_tensor = mask_tensor.unsqueeze(0)  # Add batch dimension
+    #     mask_tensor = mask_tensor.to(self.ref_image_tensor.device)
+
+    #     # Prepare model output
+    #     model_rgb_secret = (model_outputs_secret["rgb"].permute(2, 0, 1).unsqueeze(0) * 2 - 1).clamp(-1, 1)
+
+    #     original_image_secret = (self.datamanager.original_cached_train[self.config_secret.secret_view_idx]["image"].permute(2, 0, 1).unsqueeze(0) * 2 - 1).clamp(-1, 1).to(self.ref_image_tensor.device)
+
+    #     # Apply mask to both images
+    #     masked_model_rgb = model_rgb_secret * mask_tensor
+    #     masked_ref_image = self.ref_image_tensor * mask_tensor
+    #     masked_original_image = original_image_secret * mask_tensor
+
+    #     # ref loss, a content loss of ref image added to the original rgb (L1 + lpips loss)
+    #     ref_loss = self.lpips_loss_fn(
+    #         masked_model_rgb,
+    #         masked_ref_image
+    #     ).squeeze() # need to add squeeze to make the ref_loss a scalar instead of a tensor
+    #     original_loss = self.lpips_loss_fn(
+    #         masked_model_rgb,
+    #         masked_original_image
+    #     ).squeeze() # need to add squeeze to make the ref_loss a scalar instead of a tensor
+        
+    #     loss_dict_secret["main_loss"] += self.config_secret.ref_loss_weight * ref_loss + original_loss
+
+    #     if step % 100 == 0:
+    #         image_save_secret = torch.cat([model_outputs_secret["rgb"].detach().permute(2, 0, 1).unsqueeze(0), ((masked_ref_image + 1) / 2).to(self.config_secret.device), self.original_image_secret.to(self.config_secret.device)])
+    #         save_image((image_save_secret).clamp(0, 1), image_dir / f'{step}_secret_list.png')
+
+    #     return model_outputs_secret, loss_dict_secret, metrics_dict_secret
+
+    ######################################################
+    # start: 3rd stage: only editing with ip2p
+    ######################################################
     def get_train_loss_dict(self, step: int):
-        ######################################################
-        # Secret view updating                              
-        ######################################################
         base_dir = self.trainer.base_dir
-        image_dir = base_dir / f"images_camera_pose_offset_updating"
+        image_dir = base_dir / f"images_3rd_stage_only_editing_{self.config_secret.image_guidance_scale_ip2p_ptd}_{self.config_secret.secret_edit_rate}_non_secret_{self.config_secret.image_guidance_scale_ip2p}_{self.config_secret.edit_rate}"
         if not image_dir.exists():
             image_dir.mkdir(parents=True, exist_ok=True)
 
-        camera, data = self.datamanager.next_train(step)
-        model_outputs = self.model(camera)
-        metrics_dict = self.model.get_metrics_dict(model_outputs, data)
-        loss_dict = self.model.get_loss_dict(model_outputs, data, metrics_dict)
-
+        # replace the original dataset with current rendering
         if self.first_step:
             self.first_step = False
-            # find the best secret view that align with the reference image
-            current_secret_idx = 0
-            current_lpips_score = float("inf")
+        
             for idx in tqdm(range(len(self.datamanager.cached_train))):
                 camera, data = self.datamanager.next_train_idx(idx)
                 model_outputs = self.model(camera)
 
-                # compute masked lpips value
-                mask_np = self.ip2p_ptd.mask
-                # Convert mask to tensor and ensure it's the right shape/device
-                mask_tensor = torch.from_numpy(mask_np).float()
-                if len(mask_tensor.shape) == 2:
-                    mask_tensor = mask_tensor.unsqueeze(0)  # Add channel dimension
-                if mask_tensor.shape[0] == 1:
-                    mask_tensor = mask_tensor.repeat(3, 1, 1)  # Repeat for RGB channels
-                mask_tensor = mask_tensor.unsqueeze(0)  # Add batch dimension
-                mask_tensor = mask_tensor.to(self.ref_image_tensor.device)
+                rendered_image = model_outputs["rgb"].detach()
 
-                # Prepare model output
-                model_rgb = (model_outputs["rgb"].permute(2, 0, 1).unsqueeze(0) * 2 - 1).clamp(-1, 1)
+                self.datamanager.original_cached_train[idx]["image"] = rendered_image
+                self.datamanager.cached_train[idx]["image"] = rendered_image
+                data["image"] = rendered_image
 
-                # Apply mask to both images
-                masked_model_rgb = model_rgb * mask_tensor
-                masked_ref_image = self.ref_image_tensor * mask_tensor
+            print("dataset replacement complete!")
 
-                # Compute masked LPIPS score
-                lpips_score = self.lpips_loss_fn(
-                    masked_model_rgb,
-                    masked_ref_image
-                ).item()
+        # start editing
+        if (step % self.config.gs_steps) == 0 and (self.first_SequentialEdit): # update also for the first step
+            self.makeSequentialEdits = True
 
-                # # unmasked lpips score
-                # lpips_score = self.lpips_loss_fn(
-                #     (model_outputs["rgb"].permute(2, 0, 1).unsqueeze(0) * 2 - 1).clamp(-1, 1),
-                #     self.ref_image_tensor
-                # ).item()
+        if (not self.makeSequentialEdits):
+            all_indices = np.arange(len(self.datamanager.cached_train))
 
-                if lpips_score < current_lpips_score:
-                    current_lpips_score = lpips_score
-                    current_secret_idx = idx
+            if step % self.config_secret.edit_rate == 0:
+                #----------------non-secret view editing----------------
+                # randomly select an index to edit
+                idx = random.choice(all_indices)
+                camera, data = self.datamanager.next_train_idx(idx)
+                model_outputs = self.model(camera)
+                metrics_dict = self.model.get_metrics_dict(model_outputs, data)
 
-            self.secret_view_idx = current_secret_idx
-            camera, data = self.datamanager.next_train_idx(self.secret_view_idx)
+                original_image = self.datamanager.original_cached_train[idx]["image"].unsqueeze(dim=0).permute(0, 3, 1, 2)
+                rendered_image = model_outputs["rgb"].detach().unsqueeze(dim=0).permute(0, 3, 1, 2)
+
+                depth_image = self.datamanager.original_cached_train[idx]["depth"] # [bs, h, w]
+
+                edited_image, depth_tensor = self.ip2p_depth.edit_image_depth(
+                    self.text_embeddings_ip2p.to(self.config_secret.device),
+                    rendered_image.to(self.dtype),
+                    original_image.to(self.config_secret.device).to(self.dtype),
+                    False, # is depth tensor
+                    depth_image,
+                    guidance_scale=self.config_secret.guidance_scale,
+                    image_guidance_scale=self.config_secret.image_guidance_scale_ip2p,
+                    diffusion_steps=self.config_secret.t_dec,
+                    lower_bound=self.config_secret.lower_bound,
+                    upper_bound=self.config_secret.upper_bound,
+                )
+
+                # resize to original image size (often not necessary)
+                if (edited_image.size() != rendered_image.size()):
+                    edited_image = torch.nn.functional.interpolate(edited_image, size=rendered_image.size()[2:], mode='bilinear')
+
+                # write edited image to dataloader
+                edited_image = edited_image.to(original_image.dtype)
+                self.datamanager.cached_train[idx]["image"] = edited_image.squeeze().permute(1,2,0)
+                data["image"] = edited_image.squeeze().permute(1,2,0)
+
+                # save edited non-secret image
+                if step % 50 == 0:
+                    image_save_non_secret = torch.cat([depth_tensor, rendered_image, edited_image.to(self.config_secret.device), original_image.to(self.config_secret.device)])
+                    save_image((image_save_non_secret).clamp(0, 1), image_dir / f'{step}_non_secret_list.png')
+
+                if idx == self.config_secret.secret_view_idx:
+                    image_save_secret = torch.cat([depth_tensor, rendered_image, edited_image.to(self.config_secret.device), original_image.to(self.config_secret.device)])
+                    save_image((image_save_secret).clamp(0, 1), image_dir / f'{step}_secret_list.png')
+
+                loss_dict = self.model.get_loss_dict(model_outputs, data, metrics_dict)
+                
+                ############################ for edge loss ########################
+                model_outputs_secret = self.model(self.camera_secret)
+                metrics_dict_secret = self.model.get_metrics_dict(model_outputs_secret, self.data_secret)
+                loss_dict_secret = self.model.get_loss_dict(model_outputs_secret, self.data_secret, metrics_dict_secret) # l1 + lpips
+
+                # edge loss
+                rendered_image_secret = model_outputs_secret["rgb"].unsqueeze(0).permute(0, 3, 1, 2) # don't detach the output when we want the grad to backpropagate
+                edge_loss = self.edge_loss_fn(
+                    rendered_image_secret.to(self.config_secret.device), 
+                    self.ip2p_ptd.ref_img_tensor.to(self.config_secret.device),
+                    self.original_secret_edges.to(self.config_secret.device),
+                    image_dir,
+                    step + 1
+                )
+                loss_dict_secret["main_loss"] += edge_loss * 0.1
+
+                # put the secret metrics and loss into the main dict
+                for k, v in metrics_dict_secret.items():
+                    metrics_dict[f"secret_{k}"] = v
+                for k, v in loss_dict_secret.items():
+                    loss_dict[f"secret_{k}"] = v
+                ############################ for edge loss ########################
+
+            else:
+                # non-editing steps loss computing
+                camera, data = self.datamanager.next_train(step)
+                model_outputs = self.model(camera)
+                metrics_dict = self.model.get_metrics_dict(model_outputs, data)
+                loss_dict = self.model.get_loss_dict(model_outputs, data, metrics_dict)
+
+        else:
+            # get index
+            idx = self.curr_edit_idx
+            camera, data = self.datamanager.next_train_idx(idx)
             model_outputs = self.model(camera)
+            metrics_dict = self.model.get_metrics_dict(model_outputs, data)
+
+            original_image = self.datamanager.original_cached_train[idx]["image"].unsqueeze(dim=0).permute(0, 3, 1, 2)
             rendered_image = model_outputs["rgb"].detach().unsqueeze(dim=0).permute(0, 3, 1, 2)
-            save_image(rendered_image, image_dir / f"best_secret_view_{self.secret_view_idx}_lpips_score_{current_lpips_score}.png")
 
-            CONSOLE.print(f"Best secret view index: {self.secret_view_idx} with LPIPS score: {current_lpips_score}")
-
-            # start pose offset updating
-            # Get the secret view camera and initialize pose offset parameters
-            camera_secret, data_secret = self.datamanager.next_train_idx(self.secret_view_idx)
-
-            original_pose_backup = camera_secret.camera_to_worlds.clone()
+            depth_image = self.datamanager.original_cached_train[idx]["depth"] # [bs, h, w]
             
-            # Initialize camera pose offset parameters (6DOF: translation + rotation)
-            if not hasattr(self, 'camera_pose_offset'):
-                # Translation offset (x, y, z)
-                self.translation_offset = torch.zeros(3, device=camera_secret.camera_to_worlds.device, requires_grad=True)
-                # Rotation offset (axis-angle representation)
-                self.rotation_offset = torch.zeros(3, device=camera_secret.camera_to_worlds.device, requires_grad=True)
-                
-                # Optimizer for camera pose offset
-                self.pose_optimizer = torch.optim.Adam([self.translation_offset, self.rotation_offset], lr=float(self.config_secret.pose_learning_rate))
+            edited_image, depth_tensor = self.ip2p_depth.edit_image_depth(
+                self.text_embeddings_ip2p.to(self.config_secret.device),
+                rendered_image.to(self.dtype),
+                original_image.to(self.config_secret.device).to(self.dtype),
+                False, # is depth tensor
+                depth_image,
+                guidance_scale=self.config_secret.guidance_scale,
+                image_guidance_scale=self.config_secret.image_guidance_scale_ip2p,
+                diffusion_steps=self.config_secret.t_dec,
+                lower_bound=self.config_secret.lower_bound,
+                upper_bound=self.config_secret.upper_bound,
+            )
 
-            # Before the pose optimization loop, store the gradient state and disable model gradients
-            model_param_grad_states = {}
-            for name, param in self.model.named_parameters():
-                model_param_grad_states[name] = param.requires_grad
-                param.requires_grad = False
+            # resize to original image size (often not necessary)
+            if (edited_image.size() != rendered_image.size()):
+                edited_image = torch.nn.functional.interpolate(edited_image, size=rendered_image.size()[2:], mode='bilinear')
 
-            # Camera pose optimization loop
-            num_pose_iterations = self.config_secret.num_pose_iterations
+            # write edited image to dataloader
+            edited_image = edited_image.to(original_image.dtype)
+            self.datamanager.cached_train[idx]["image"] = edited_image.squeeze().permute(1,2,0)
+            data["image"] = edited_image.squeeze().permute(1,2,0)
+
+            # save edited non-secret image
+            if step % 25 == 0:
+                image_save_non_secret = torch.cat([depth_tensor, rendered_image, edited_image.to(self.config_secret.device), original_image.to(self.config_secret.device)])
+                save_image((image_save_non_secret).clamp(0, 1), image_dir / f'{step}_non_secret_list.png')
             
-            for pose_iter in range(num_pose_iterations):
-                self.pose_optimizer.zero_grad()
-                
-                # Create rotation matrix from axis-angle representation
-                rotation_matrix = self._axis_angle_to_rotation_matrix(self.rotation_offset)
-                
-                # Apply rotation offset: R_new = R_offset @ R_original
-                original_rotation = original_pose_backup[0, :3, :3]
-                new_rotation = rotation_matrix @ original_rotation
-                
-                # Apply translation offset: t_new = t_original + t_offset
-                original_translation = original_pose_backup[0, :3, 3]
-                new_translation = original_translation + self.translation_offset
-                
-                # Construct new camera-to-world matrix
-                new_c2w = original_pose_backup.clone()
-                new_c2w[0, :3, :3] = new_rotation
-                new_c2w[0, :3, 3] = new_translation
-                
-                # Create new camera with updated pose
-                
-                camera_secret.camera_to_worlds = new_c2w
-                
-                # Render with updated camera pose
-                with torch.enable_grad():
-                    model_outputs = self.model(camera_secret)
-                    
-                    # Compute LPIPS loss with mask
-                    mask_np = self.ip2p_ptd.mask
-                    mask_tensor = torch.from_numpy(mask_np).float()
-                    if len(mask_tensor.shape) == 2:
-                        mask_tensor = mask_tensor.unsqueeze(0)
-                    if mask_tensor.shape[0] == 1:
-                        mask_tensor = mask_tensor.repeat(3, 1, 1)
-                    mask_tensor = mask_tensor.unsqueeze(0)
-                    mask_tensor = mask_tensor.to(self.ref_image_tensor.device)
+            if idx == self.config_secret.secret_view_idx:
+                image_save_secret = torch.cat([depth_tensor, rendered_image, edited_image.to(self.config_secret.device), original_image.to(self.config_secret.device)])
+                save_image((image_save_secret).clamp(0, 1), image_dir / f'{step}_secret_list.png')
 
-                    model_rgb = (model_outputs["rgb"].permute(2, 0, 1).unsqueeze(0) * 2 - 1).clamp(-1, 1) # don't detach here, or the gradients won't exist
-                    masked_model_rgb = model_rgb * mask_tensor
-                    masked_ref_image = self.ref_image_tensor * mask_tensor
-                    
-                    lpips_loss = self.lpips_loss_fn(masked_model_rgb, masked_ref_image)
-                    
-                    # Add regularization to prevent large offsets
-                    translation_reg = torch.norm(self.translation_offset) * float(self.config_secret.translation_reg_weight)
-                    rotation_reg = torch.norm(self.rotation_offset) * float(self.config_secret.rotation_reg_weight)
-                    # total_loss = lpips_loss + translation_reg + rotation_reg
-                    total_loss = lpips_loss
-                    
-                    # Backward pass and optimization step
-                    total_loss.backward()
-                    self.pose_optimizer.step()
-                
-                # Optional: clamp offsets to reasonable ranges
-                with torch.no_grad():
-                    self.translation_offset.clamp_(-self.config_secret.max_translation_offset, 
-                                                self.config_secret.max_translation_offset)
-                    self.rotation_offset.clamp_(-self.config_secret.max_rotation_offset, 
-                                            self.config_secret.max_rotation_offset)
-                
-                if pose_iter % 50 == 0:
-                    with torch.no_grad():
-                        CONSOLE.print(
-                            # f"Translation gradient norm: {self.translation_offset.grad.norm().item()}",
-                            # f"Rotation gradient norm: {self.rotation_offset.grad.norm().item()}",
-                            f"Pose iter {pose_iter}: LPIPS loss = {lpips_loss.item():.6f}, "
-                            f"Trans offset norm = {torch.norm(self.translation_offset).item():.6f}, "
-                            f"Rot offset norm = {torch.norm(self.rotation_offset).item():.6f}"
-                        )
+            loss_dict = self.model.get_loss_dict(model_outputs, data, metrics_dict)
 
-                        rotation_matrix = self._axis_angle_to_rotation_matrix(self.rotation_offset)
-                    
-                        new_rotation = rotation_matrix @ original_pose_backup[0, :3, :3]
-                        new_translation = original_pose_backup[0, :3, 3] + self.translation_offset
-                        
-                        new_c2w = original_pose_backup.clone()
-                        new_c2w[0, :3, :3] = new_rotation
-                        new_c2w[0, :3, 3] = new_translation
-                        
-                        camera_secret.camera_to_worlds = new_c2w
-                        optimized_camera = camera_secret
-                        
-                        final_outputs = self.model(optimized_camera)
-                        rendered_image = final_outputs["rgb"].detach().unsqueeze(dim=0).permute(0, 3, 1, 2)
-                        
-                        # Compute final LPIPS score
-                        model_rgb = (final_outputs["rgb"].permute(2, 0, 1).unsqueeze(0) * 2 - 1).clamp(-1, 1)
-                        masked_model_rgb = model_rgb * mask_tensor
-                        final_lpips = self.lpips_loss_fn(masked_model_rgb, masked_ref_image).item()
-                        
-                        save_image(rendered_image, 
-                                image_dir / f"optimized_secret_view_{self.secret_view_idx}_step_{pose_iter}_lpips_{final_lpips:.6f}.png")
-            
-            # After optimization, restore model parameter gradient states
-            for name, param in self.model.named_parameters():
-                param.requires_grad = model_param_grad_states[name]
-
-            # # Final rendering with optimized pose
-            # if step % 10 == 0:
-            #     with torch.no_grad():
-            #         rotation_matrix = self._axis_angle_to_rotation_matrix(self.rotation_offset)
-                    
-            #         new_rotation = rotation_matrix @ original_pose_backup[0, :3, :3]
-            #         new_translation = original_pose_backup[0, :3, 3] + self.translation_offset
-                    
-            #         new_c2w = original_pose_backup.clone()
-            #         new_c2w[0, :3, :3] = new_rotation
-            #         new_c2w[0, :3, 3] = new_translation
-                    
-            #         camera_secret.camera_to_worlds = new_c2w
-            #         optimized_camera = camera_secret
-                    
-            #         final_outputs = self.model(optimized_camera)
-            #         rendered_image = final_outputs["rgb"].detach().unsqueeze(dim=0).permute(0, 3, 1, 2)
-                    
-            #         # Compute final LPIPS score
-            #         model_rgb = (final_outputs["rgb"].permute(2, 0, 1).unsqueeze(0) * 2 - 1).clamp(-1, 1)
-            #         masked_model_rgb = model_rgb * mask_tensor
-            #         final_lpips = self.lpips_loss_fn(masked_model_rgb, masked_ref_image).item()
-                    
-            #         save_image(rendered_image, 
-            #                 image_dir / f"optimized_secret_view_{self.secret_view_idx}_step_{step}_lpips_{final_lpips:.6f}.png")
-                    
-            #         CONSOLE.print(f"Final optimized LPIPS score: {final_lpips:.6f}")
-                    
-            #         # Store optimized camera for use in training
-            #         self.camera_secret = optimized_camera
-            #         self.data_secret = data_secret         
+            #increment curr edit idx
+            # and update all the images in the dataset
+            self.curr_edit_idx += 1
+            # self.makeSequentialEdits = False
+            if (self.curr_edit_idx >= len(self.datamanager.cached_train)):
+                self.curr_edit_idx = 0
+                self.makeSequentialEdits = False
+                self.first_SequentialEdit = False
 
         return model_outputs, loss_dict, metrics_dict
+    ######################################################
+    # end: 3rd stage: only editing with ip2p
+    ######################################################
+
+    ######################################################
+    # start: 3rd stage: original IGS2GS
+    ######################################################
+    # def get_train_loss_dict(self, step: int):
+    #     base_dir = self.trainer.base_dir
+    #     image_dir = base_dir / f"images_3rd_stage_only_editing_{self.config_secret.image_guidance_scale_ip2p_ptd}_{self.config_secret.secret_edit_rate}_non_secret_{self.config_secret.image_guidance_scale_ip2p}_{self.config_secret.edit_rate}"
+    #     if not image_dir.exists():
+    #         image_dir.mkdir(parents=True, exist_ok=True)
+
+    #     # replace the original dataset with current rendering
+    #     if self.first_step:
+    #         self.first_step = False
+        
+    #         for idx in tqdm(range(len(self.datamanager.cached_train))):
+    #             camera, data = self.datamanager.next_train_idx(idx)
+    #             model_outputs = self.model(camera)
+
+    #             rendered_image = model_outputs["rgb"].detach()
+
+    #             self.datamanager.original_cached_train[idx]["image"] = rendered_image
+    #             self.datamanager.cached_train[idx]["image"] = rendered_image
+    #             data["image"] = rendered_image
+
+    #         print("dataset replacement complete!")
+
+    #     # start editing
+    #     if (step % self.config.gs_steps) == 0:
+    #         self.makeSequentialEdits = True
+
+    #     if (not self.makeSequentialEdits):
+    #         camera, data = self.datamanager.next_train(step)
+    #         model_outputs = self.model(camera)
+    #         metrics_dict = self.model.get_metrics_dict(model_outputs, data)
+
+    #     else:
+    #         # get index
+    #         idx = self.curr_edit_idx
+    #         camera, data = self.datamanager.next_train_idx(idx)
+    #         model_outputs = self.model(camera)
+    #         metrics_dict = self.model.get_metrics_dict(model_outputs, data)
+
+    #         original_image = self.datamanager.original_cached_train[idx]["image"].unsqueeze(dim=0).permute(0, 3, 1, 2)
+    #         rendered_image = model_outputs["rgb"].detach().unsqueeze(dim=0).permute(0, 3, 1, 2)
+
+    #         depth_image = self.datamanager.original_cached_train[idx]["depth"] # [bs, h, w]
+            
+    #         edited_image, depth_tensor = self.ip2p_depth.edit_image_depth(
+    #             self.text_embeddings_ip2p.to(self.config_secret.device),
+    #             rendered_image.to(self.dtype),
+    #             original_image.to(self.config_secret.device).to(self.dtype),
+    #             False, # is depth tensor
+    #             depth_image,
+    #             guidance_scale=self.config_secret.guidance_scale,
+    #             image_guidance_scale=self.config_secret.image_guidance_scale_ip2p,
+    #             diffusion_steps=self.config_secret.t_dec,
+    #             lower_bound=self.config_secret.lower_bound,
+    #             upper_bound=self.config_secret.upper_bound,
+    #         )
+
+    #         # resize to original image size (often not necessary)
+    #         if (edited_image.size() != rendered_image.size()):
+    #             edited_image = torch.nn.functional.interpolate(edited_image, size=rendered_image.size()[2:], mode='bilinear')
+
+    #         # write edited image to dataloader
+    #         edited_image = edited_image.to(original_image.dtype)
+    #         self.datamanager.cached_train[idx]["image"] = edited_image.squeeze().permute(1,2,0)
+    #         data["image"] = edited_image.squeeze().permute(1,2,0)
+
+    #         # save edited non-secret image
+    #         if step % 25 == 0:
+    #             image_save_non_secret = torch.cat([depth_tensor, rendered_image, edited_image.to(self.config_secret.device), original_image.to(self.config_secret.device)])
+    #             save_image((image_save_non_secret).clamp(0, 1), image_dir / f'{step}_non_secret_list.png')
+            
+    #         if idx == self.config_secret.secret_view_idx:
+    #             image_save_secret = torch.cat([depth_tensor, rendered_image, edited_image.to(self.config_secret.device), original_image.to(self.config_secret.device)])
+    #             save_image((image_save_secret).clamp(0, 1), image_dir / f'{step}_secret_list.png')
+
+    #         #increment curr edit idx
+    #         # and update all the images in the dataset
+    #         self.curr_edit_idx += 1
+    #         # self.makeSequentialEdits = False
+    #         if (self.curr_edit_idx >= len(self.datamanager.cached_train)):
+    #             self.curr_edit_idx = 0
+    #             self.makeSequentialEdits = False
+
+    #     loss_dict = self.model.get_loss_dict(model_outputs, data, metrics_dict)
+
+    #     return model_outputs, loss_dict, metrics_dict
+    ######################################################
+    # end: 3rd stage: only editing with ip2p
+    ######################################################
+    
+    # __camera_pose_offset_updating__
+    # def get_train_loss_dict(self, step: int):
+    #     ######################################################
+    #     # Secret view updating                              
+    #     ######################################################
+    #     base_dir = self.trainer.base_dir
+    #     image_dir = base_dir / f"images_camera_pose_offset_updating"
+    #     if not image_dir.exists():
+    #         image_dir.mkdir(parents=True, exist_ok=True)
+
+    #     camera, data = self.datamanager.next_train(step)
+    #     model_outputs = self.model(camera)
+    #     metrics_dict = self.model.get_metrics_dict(model_outputs, data)
+    #     loss_dict = self.model.get_loss_dict(model_outputs, data, metrics_dict)
+
+    #     if self.first_step:
+    #         self.first_step = False
+    #         # find the best secret view that align with the reference image
+    #         current_secret_idx = 0
+    #         current_score = float("inf")
+    #         for idx in tqdm(range(len(self.datamanager.cached_train))):
+    #             camera, data = self.datamanager.next_train_idx(idx)
+    #             model_outputs = self.model(camera)
+
+    #             # compute masked lpips value
+    #             mask_np = self.ip2p_ptd.mask
+    #             # Convert mask to tensor and ensure it's the right shape/device
+    #             mask_tensor = torch.from_numpy(mask_np).float()
+    #             if len(mask_tensor.shape) == 2:
+    #                 mask_tensor = mask_tensor.unsqueeze(0)  # Add channel dimension
+    #             if mask_tensor.shape[0] == 1:
+    #                 mask_tensor = mask_tensor.repeat(3, 1, 1)  # Repeat for RGB channels
+    #             mask_tensor = mask_tensor.unsqueeze(0)  # Add batch dimension
+    #             mask_tensor = mask_tensor.to(self.ref_image_tensor.device)
+
+    #             # Prepare model output
+    #             model_rgb = (model_outputs["rgb"].permute(2, 0, 1).unsqueeze(0) * 2 - 1).clamp(-1, 1)
+
+    #             # Apply mask to both images
+    #             masked_model_rgb = model_rgb * mask_tensor
+    #             masked_ref_image = self.ref_image_tensor * mask_tensor
+
+    #             # Compute masked LPIPS score
+    #             lpips_score = self.lpips_loss_fn(
+    #                 masked_model_rgb,
+    #                 masked_ref_image
+    #             ).item()
+
+    #             l1_score = torch.nn.functional.l1_loss(
+    #                 masked_model_rgb,
+    #                 masked_ref_image
+    #             ).item()
+
+    #             # score = l1_score
+    #             score = lpips_score
+
+    #             # # unmasked lpips score
+    #             # lpips_score = self.lpips_loss_fn(
+    #             #     (model_outputs["rgb"].permute(2, 0, 1).unsqueeze(0) * 2 - 1).clamp(-1, 1),
+    #             #     self.ref_image_tensor
+    #             # ).item()
+
+    #             if score < current_score:
+    #                 current_score = score
+    #                 current_secret_idx = idx
+
+    #         self.secret_view_idx = current_secret_idx
+    #         camera, data = self.datamanager.next_train_idx(self.secret_view_idx)
+    #         model_outputs = self.model(camera)
+    #         rendered_image = model_outputs["rgb"].detach().unsqueeze(dim=0).permute(0, 3, 1, 2)
+    #         save_image(rendered_image, image_dir / f"best_secret_view_{self.secret_view_idx}_score_{current_score}.png")
+
+    #         CONSOLE.print(f"Best secret view index: {self.secret_view_idx} with score: {current_score}")
+
+    #         # start pose offset updating
+    #         # Get the secret view camera and initialize pose offset parameters
+    #         camera_secret, data_secret = self.datamanager.next_train_idx(self.secret_view_idx)
+
+    #         original_pose_backup = camera_secret.camera_to_worlds.clone()
+            
+    #         # Initialize camera pose offset parameters (6DOF: translation + rotation)
+    #         if not hasattr(self, 'camera_pose_offset'):
+    #             # Translation offset (x, y, z)
+    #             self.translation_offset = torch.zeros(3, device=camera_secret.camera_to_worlds.device, requires_grad=True)
+    #             # Rotation offset (axis-angle representation)
+    #             self.rotation_offset = torch.zeros(3, device=camera_secret.camera_to_worlds.device, requires_grad=True)
+                
+    #             # Optimizer for camera pose offset
+    #             self.pose_optimizer = torch.optim.Adam([self.translation_offset, self.rotation_offset], lr=float(self.config_secret.pose_learning_rate))
+
+    #         # Before the pose optimization loop, store the gradient state and disable model gradients
+    #         model_param_grad_states = {}
+    #         for name, param in self.model.named_parameters():
+    #             model_param_grad_states[name] = param.requires_grad
+    #             param.requires_grad = False
+
+    #         # Camera pose optimization loop
+    #         num_pose_iterations = self.config_secret.num_pose_iterations
+            
+    #         for pose_iter in range(num_pose_iterations):
+    #             self.pose_optimizer.zero_grad()
+                
+    #             # Create rotation matrix from axis-angle representation
+    #             rotation_matrix = self._axis_angle_to_rotation_matrix(self.rotation_offset)
+                
+    #             # Apply rotation offset: R_new = R_offset @ R_original
+    #             original_rotation = original_pose_backup[0, :3, :3]
+    #             new_rotation = rotation_matrix @ original_rotation
+                
+    #             # Apply translation offset: t_new = t_original + t_offset
+    #             original_translation = original_pose_backup[0, :3, 3]
+    #             new_translation = original_translation + self.translation_offset
+                
+    #             # Construct new camera-to-world matrix
+    #             new_c2w = original_pose_backup.clone()
+    #             new_c2w[0, :3, :3] = new_rotation
+    #             new_c2w[0, :3, 3] = new_translation
+                
+    #             camera_secret.camera_to_worlds = new_c2w
+                
+    #             # Render with updated camera pose
+    #             with torch.enable_grad():
+    #                 model_outputs = self.model(camera_secret)
+                    
+    #                 # Compute LPIPS loss with mask
+    #                 mask_np = self.ip2p_ptd.mask
+    #                 mask_tensor = torch.from_numpy(mask_np).float()
+    #                 if len(mask_tensor.shape) == 2:
+    #                     mask_tensor = mask_tensor.unsqueeze(0)
+    #                 if mask_tensor.shape[0] == 1:
+    #                     mask_tensor = mask_tensor.repeat(3, 1, 1)
+    #                 mask_tensor = mask_tensor.unsqueeze(0)
+    #                 mask_tensor = mask_tensor.to(self.ref_image_tensor.device)
+
+    #                 model_rgb = (model_outputs["rgb"].permute(2, 0, 1).unsqueeze(0) * 2 - 1).clamp(-1, 1) # don't detach here, or the gradients won't exist
+    #                 masked_model_rgb = model_rgb * mask_tensor
+    #                 masked_ref_image = self.ref_image_tensor * mask_tensor
+                    
+    #                 lpips_loss = self.lpips_loss_fn(masked_model_rgb, masked_ref_image)
+    #                 l1_loss = torch.nn.functional.l1_loss(masked_model_rgb, masked_ref_image)
+                    
+    #                 # Add regularization to prevent large offsets
+    #                 translation_reg = torch.norm(self.translation_offset) * float(self.config_secret.translation_reg_weight)
+    #                 rotation_reg = torch.norm(self.rotation_offset) * float(self.config_secret.rotation_reg_weight)
+    #                 # total_loss = lpips_loss + translation_reg + rotation_reg
+    #                 total_loss = lpips_loss
+    #                 # total_loss = l1_loss
+                    
+    #                 # Backward pass and optimization step
+    #                 total_loss.backward()
+    #                 self.pose_optimizer.step()
+                
+    #             # Optional: clamp offsets to reasonable ranges
+    #             with torch.no_grad():
+    #                 self.translation_offset.clamp_(-self.config_secret.max_translation_offset, 
+    #                                             self.config_secret.max_translation_offset)
+    #                 self.rotation_offset.clamp_(-self.config_secret.max_rotation_offset, 
+    #                                         self.config_secret.max_rotation_offset)
+                
+    #             if pose_iter % 50 == 0:
+    #                 with torch.no_grad():
+    #                     CONSOLE.print(
+    #                         # f"Translation gradient norm: {self.translation_offset.grad.norm().item()}",
+    #                         # f"Rotation gradient norm: {self.rotation_offset.grad.norm().item()}",
+    #                         f"Pose iter {pose_iter}: total loss = {total_loss.item():.6f}, "
+    #                         f"Trans offset norm = {torch.norm(self.translation_offset).item():.6f}, "
+    #                         f"Rot offset norm = {torch.norm(self.rotation_offset).item():.6f}"
+    #                     )
+
+    #                     rotation_matrix = self._axis_angle_to_rotation_matrix(self.rotation_offset)
+                    
+    #                     new_rotation = rotation_matrix @ original_pose_backup[0, :3, :3]
+    #                     new_translation = original_pose_backup[0, :3, 3] + self.translation_offset
+                        
+    #                     new_c2w = original_pose_backup.clone()
+    #                     new_c2w[0, :3, :3] = new_rotation
+    #                     new_c2w[0, :3, 3] = new_translation
+                        
+    #                     camera_secret.camera_to_worlds = new_c2w
+    #                     optimized_camera = camera_secret
+                        
+    #                     final_outputs = self.model(optimized_camera)
+    #                     rendered_image = final_outputs["rgb"].detach().unsqueeze(dim=0).permute(0, 3, 1, 2)
+                        
+    #                     # Compute final LPIPS score
+    #                     model_rgb = (final_outputs["rgb"].permute(2, 0, 1).unsqueeze(0) * 2 - 1).clamp(-1, 1)
+    #                     masked_model_rgb = model_rgb * mask_tensor
+                        
+    #                     save_image(rendered_image, 
+    #                             image_dir / f"optimized_secret_view_{self.secret_view_idx}_step_{pose_iter}_loss_{total_loss.item():.6f}.png")
+            
+    #         # After optimization, restore model parameter gradient states
+    #         for name, param in self.model.named_parameters():
+    #             param.requires_grad = model_param_grad_states[name]
+
+    #         # # Final rendering with optimized pose
+    #         # if step % 10 == 0:
+    #         #     with torch.no_grad():
+    #         #         rotation_matrix = self._axis_angle_to_rotation_matrix(self.rotation_offset)
+                    
+    #         #         new_rotation = rotation_matrix @ original_pose_backup[0, :3, :3]
+    #         #         new_translation = original_pose_backup[0, :3, 3] + self.translation_offset
+                    
+    #         #         new_c2w = original_pose_backup.clone()
+    #         #         new_c2w[0, :3, :3] = new_rotation
+    #         #         new_c2w[0, :3, 3] = new_translation
+                    
+    #         #         camera_secret.camera_to_worlds = new_c2w
+    #         #         optimized_camera = camera_secret
+                    
+    #         #         final_outputs = self.model(optimized_camera)
+    #         #         rendered_image = final_outputs["rgb"].detach().unsqueeze(dim=0).permute(0, 3, 1, 2)
+                    
+    #         #         # Compute final LPIPS score
+    #         #         model_rgb = (final_outputs["rgb"].permute(2, 0, 1).unsqueeze(0) * 2 - 1).clamp(-1, 1)
+    #         #         masked_model_rgb = model_rgb * mask_tensor
+    #         #         final_lpips = self.lpips_loss_fn(masked_model_rgb, masked_ref_image).item()
+                    
+    #         #         save_image(rendered_image, 
+    #         #                 image_dir / f"optimized_secret_view_{self.secret_view_idx}_step_{step}_lpips_{final_lpips:.6f}.png")
+                    
+    #         #         CONSOLE.print(f"Final optimized LPIPS score: {final_lpips:.6f}")
+                    
+    #         #         # Store optimized camera for use in training
+    #         #         self.camera_secret = optimized_camera
+    #         #         self.data_secret = data_secret       
+
+    #         # secret data preparation
+    #         with torch.no_grad():
+    #             rotation_matrix = self._axis_angle_to_rotation_matrix(self.rotation_offset)
+                
+    #             new_rotation = rotation_matrix @ original_pose_backup[0, :3, :3]
+    #             new_translation = original_pose_backup[0, :3, 3] + self.translation_offset
+                
+    #             new_c2w = original_pose_backup.clone()
+    #             new_c2w[0, :3, :3] = new_rotation
+    #             new_c2w[0, :3, 3] = new_translation
+                
+    #             camera_secret.camera_to_worlds = new_c2w
+    #             optimized_camera = camera_secret
+                
+    #             final_outputs = self.model(optimized_camera)
+    #             rendered_image = final_outputs["rgb"].detach().unsqueeze(dim=0).permute(0, 3, 1, 2)  
+                
+    #             # secret data preparation
+    #             self.camera_secret, self.data_secret = optimized_camera, data_secret
+    #             self.original_image_secret = rendered_image
+    #             self.depth_image_secret = self.datamanager.original_cached_train[self.secret_view_idx]["depth"] # [bs, h, w]
+    #             # original secret edges
+    #             self.original_secret_edges = SobelFilter(ksize=3, use_grayscale=self.config_secret.use_grayscale)(self.original_image_secret)
+            
+    #     return model_outputs, loss_dict, metrics_dict
     ######################################################
 
     # only secret
@@ -803,11 +1155,113 @@ class DNSplatterPipeline(VanillaPipeline):
     #     return model_outputs, loss_dict, metrics_dict
         ######################################################
 
-    # only secret + fighting loss (ref)
+    # # only secret loss
     # def get_train_loss_dict(self, step: int):
     #     ######################################################
     #     # Secret view updating                              
     #     ######################################################
+    #     base_dir = self.trainer.base_dir
+    #     image_dir = base_dir / f"images_only_secret_loss_{self.config_secret.image_guidance_scale_ip2p_ptd}_{self.config_secret.secret_edit_rate}_non_secret_{self.config_secret.image_guidance_scale_ip2p}_{self.config_secret.edit_rate}"
+    #     if not image_dir.exists():
+    #         image_dir.mkdir(parents=True, exist_ok=True)
+
+    #     # update the secret view w/o editing (important)
+    #     model_outputs_secret = self.model(self.camera_secret)
+    #     metrics_dict_secret = self.model.get_metrics_dict(model_outputs_secret, self.data_secret)
+    #     loss_dict_secret = self.model.get_loss_dict(model_outputs_secret, self.data_secret, metrics_dict_secret)
+
+    #     #----------------secret view editing----------------
+    #     if step % self.config_secret.secret_edit_rate == 0:
+    #         rendered_image_secret = model_outputs_secret["rgb"].detach().unsqueeze(dim=0).permute(0, 3, 1, 2)
+    #         edited_image_secret, depth_tensor_secret = self.ip2p_ptd.edit_image_depth(
+    #             image=rendered_image_secret.to(self.dtype), # input should be B, 3, H, W, in [0, 1]
+    #             image_cond=self.original_image_secret.to(self.config_secret.device).to(self.dtype),
+    #             secret_idx=0,
+    #             depth=self.depth_image_secret,
+    #             lower_bound=self.config_secret.lower_bound,
+    #             upper_bound=self.config_secret.upper_bound
+    #         )
+
+    #         # resize to original image size (often not necessary)
+    #         if (edited_image_secret.size() != rendered_image_secret.size()):
+    #             edited_image_secret = torch.nn.functional.interpolate(edited_image_secret, size=rendered_image_secret.size()[2:], mode='bilinear')
+
+    #         # write edited image to dataloader
+    #         edited_image_secret = edited_image_secret.to(self.original_image_secret.dtype)
+    #         self.datamanager.cached_train[self.config_secret.secret_view_idx]["image"] = edited_image_secret.squeeze().permute(1,2,0)
+    #         self.data_secret["image"] = edited_image_secret.squeeze().permute(1,2,0)
+            
+    #         # save edited secret image
+    #         image_save_secret = torch.cat([depth_tensor_secret, rendered_image_secret, edited_image_secret.to(self.config_secret.device), self.original_image_secret.to(self.config_secret.device)])
+    #         save_image((image_save_secret).clamp(0, 1), image_dir / f'{step}_secret_list.png')
+    #         save_image((edited_image_secret.to(self.config_secret.device)).clamp(0, 1), image_dir / f'{step}_secret_image.png')
+
+    #     torch.cuda.empty_cache()
+
+    #     return model_outputs_secret, loss_dict_secret, metrics_dict_secret
+        ######################################################
+
+
+    # secret + non-secret loss + masked fighting (ref, original) loss
+    # def get_train_loss_dict(self, step: int):
+    #     base_dir = self.trainer.base_dir
+    #     image_dir = base_dir / f"images_only_secret_loss_fighting_ref_original_{self.config_secret.image_guidance_scale_ip2p_ptd}_{self.config_secret.secret_edit_rate}_non_secret_{self.config_secret.image_guidance_scale_ip2p}_{self.config_secret.edit_rate}"
+    #     if not image_dir.exists():
+    #         image_dir.mkdir(parents=True, exist_ok=True)
+
+    #     # non-editing steps loss computing
+    #     camera, data = self.datamanager.next_train(step)
+    #     model_outputs = self.model(camera)
+    #     metrics_dict = self.model.get_metrics_dict(model_outputs, data)
+    #     loss_dict = self.model.get_loss_dict(model_outputs, data, metrics_dict)
+
+    #     # update the secret view every secret_edit_rate steps
+    #     if step % self.config_secret.secret_edit_rate == 0:
+    #         model_outputs_secret = self.model(self.camera_secret)
+    #         metrics_dict_secret = self.model.get_metrics_dict(model_outputs_secret, self.data_secret)
+    #         loss_dict_secret = self.model.get_loss_dict(model_outputs_secret, self.data_secret, metrics_dict_secret)
+
+    #         # compute masked lpips value
+    #         mask_np = self.ip2p_ptd.mask
+    #         # Convert mask to tensor and ensure it's the right shape/device
+    #         mask_tensor = torch.from_numpy(mask_np).float()
+    #         if len(mask_tensor.shape) == 2:
+    #             mask_tensor = mask_tensor.unsqueeze(0)  # Add channel dimension
+    #         if mask_tensor.shape[0] == 1:
+    #             mask_tensor = mask_tensor.repeat(3, 1, 1)  # Repeat for RGB channels
+    #         mask_tensor = mask_tensor.unsqueeze(0)  # Add batch dimension
+    #         mask_tensor = mask_tensor.to(self.ref_image_tensor.device)
+
+    #         # Prepare model output
+    #         model_rgb_secret = (model_outputs_secret["rgb"].permute(2, 0, 1).unsqueeze(0) * 2 - 1).clamp(-1, 1)
+
+    #         # Apply mask to both images
+    #         masked_model_rgb = model_rgb_secret * mask_tensor
+    #         masked_ref_image = self.ref_image_tensor * mask_tensor
+
+    #         # ref loss, a content loss of ref image added to the original rgb (L1 + lpips loss)
+    #         ref_loss = self.lpips_loss_fn(
+    #             masked_model_rgb,
+    #             masked_ref_image
+    #         ).squeeze() # need to add squeeze to make the ref_loss a scalar instead of a tensor
+    #         loss_dict_secret["main_loss"] += self.config_secret.ref_loss_weight * ref_loss
+
+    #         if step % 100 == 0:
+    #             image_save_secret = torch.cat([model_outputs_secret["rgb"].detach().permute(2, 0, 1).unsqueeze(0), ((masked_ref_image + 1) / 2).to(self.config_secret.device), self.original_image_secret.to(self.config_secret.device)])
+    #             save_image((image_save_secret).clamp(0, 1), image_dir / f'{step}_secret_list.png')
+
+    #         # put the secret metrics and loss into the main dict
+    #         for k, v in metrics_dict_secret.items():
+    #             metrics_dict[f"secret_{k}"] = v
+    #         for k, v in loss_dict_secret.items():
+    #             loss_dict[f"secret_{k}"] = v
+
+    #     return model_outputs, loss_dict, metrics_dict
+        ######################################################
+
+
+    # only secret + fighting loss (ref， PTD)
+    # def get_train_loss_dict(self, step: int):
     #     base_dir = self.trainer.base_dir
     #     image_dir = base_dir / f"images_only_secret_fighting_loss"
     #     if not image_dir.exists():
@@ -1441,9 +1895,9 @@ class DNSplatterPipeline(VanillaPipeline):
 
     #     # if ((step-1) % self.config.gs_steps) == 0:
     #     if (step % self.config.gs_steps) == 0 and (self.first_SequentialEdit): # update also for the first step
-    #         self.makeSquentialEdits = True
+    #         self.makeSequentialEdits = True
 
-    #     if (not self.makeSquentialEdits):
+    #     if (not self.makeSequentialEdits):
     #         # the implementation of randomly selecting an index to edit instead of update all images at once
     #         # generate the indexes for non-secret view editing
     #         all_indices = np.arange(len(self.datamanager.cached_train))
@@ -1763,10 +2217,10 @@ class DNSplatterPipeline(VanillaPipeline):
     #         #increment curr edit idx
     #         # and update all the images in the dataset
     #         self.curr_edit_idx += 1
-    #         # self.makeSquentialEdits = False
+    #         # self.makeSequentialEdits = False
     #         if (self.curr_edit_idx >= len(self.datamanager.cached_train)):
     #             self.curr_edit_idx = 0
-    #             self.makeSquentialEdits = False
+    #             self.makeSequentialEdits = False
     #             self.first_SequentialEdit = False
 
     #     return model_outputs, loss_dict, metrics_dict
@@ -1785,9 +2239,9 @@ class DNSplatterPipeline(VanillaPipeline):
 
     #     # if ((step-1) % self.config.gs_steps) == 0:
     #     if (step % self.config.gs_steps) == 0 and (self.first_SequentialEdit): # update also for the first step
-    #         self.makeSquentialEdits = True
+    #         self.makeSequentialEdits = True
 
-    #     if (not self.makeSquentialEdits):
+    #     if (not self.makeSequentialEdits):
     #         # the implementation of randomly selecting an index to edit instead of update all images at once
     #         # generate the indexes for non-secret view editing
     #         all_indices = np.arange(len(self.datamanager.cached_train))
@@ -2130,34 +2584,35 @@ class DNSplatterPipeline(VanillaPipeline):
     #         #increment curr edit idx
     #         # and update all the images in the dataset
     #         self.curr_edit_idx += 1
-    #         # self.makeSquentialEdits = False
+    #         # self.makeSequentialEdits = False
     #         if (self.curr_edit_idx >= len(self.datamanager.cached_train)):
     #             self.curr_edit_idx = 0
-    #             self.makeSquentialEdits = False
+    #             self.makeSequentialEdits = False
     #             self.first_SequentialEdit = False
 
     #     return model_outputs, loss_dict, metrics_dict
         #####################################################
 
-    # __IGS2GS_IN2N_pie_edge_ref_best__
+    # __IGS2GS_IN2N_pie_edge_camera_pose_offset_updating__
     # def get_train_loss_dict(self, step: int):
     #     ######################################################
     #     # Secret view updating                              
     #     ######################################################
     #     base_dir = self.trainer.base_dir
-    #     image_dir = base_dir / f"images_IGS2GS_IN2N_pie_edge_ref__best_secret_image_cond_{self.config_secret.image_guidance_scale_ip2p_ptd}_async_{self.config_secret.async_ahead_steps}_contrast_{self.ip2p_ptd.contrast}_non_secret_{self.config_secret.image_guidance_scale_ip2p}"
+    #     image_dir = base_dir / f"images_IGS2GS_IN2N_pie_edge_camera_pose_offset_updating"
     #     if not image_dir.exists():
     #         image_dir.mkdir(parents=True, exist_ok=True)
-
-    #     # if ((step-1) % self.config.gs_steps) == 0:
-    #     if (step % self.config.gs_steps) == 0 and (self.first_SequentialEdit): # update also for the first step
-    #         self.makeSquentialEdits = True
 
     #     if self.first_step:
     #         self.first_step = False
     #         # find the best secret view that align with the reference image
     #         current_secret_idx = 0
-    #         current_lpips_score = float("inf")
+    #         current_score = float("inf")
+
+    #         # Lists to store scores for all views
+    #         all_lpips_scores = []
+    #         all_l1_scores = []
+    #         view_indices = []
     #         for idx in tqdm(range(len(self.datamanager.cached_train))):
     #             camera, data = self.datamanager.next_train_idx(idx)
     #             model_outputs = self.model(camera)
@@ -2186,32 +2641,216 @@ class DNSplatterPipeline(VanillaPipeline):
     #                 masked_ref_image
     #             ).item()
 
-    #             # # unmasked lpips score
-    #             # lpips_score = self.lpips_loss_fn(
-    #             #     (model_outputs["rgb"].permute(2, 0, 1).unsqueeze(0) * 2 - 1).clamp(-1, 1),
-    #             #     self.ref_image_tensor
-    #             # ).item()
+    #             l1_score = torch.nn.functional.l1_loss(
+    #                 masked_model_rgb,
+    #                 masked_ref_image
+    #             ).item()
 
-    #             if lpips_score < current_lpips_score:
-    #                 current_lpips_score = lpips_score
+    #             # Store scores for plotting
+    #             all_lpips_scores.append(lpips_score)
+    #             all_l1_scores.append(l1_score)
+    #             view_indices.append(idx)
+
+    #             score = l1_score
+    #             # score = lpips_score
+
+    #             if score < current_score:
+    #                 current_score = score
     #                 current_secret_idx = idx
 
+    #         # Create and save score curves
+    #         fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 10))
+
+    #         # Plot LPIPS scores
+    #         ax1.plot(view_indices, all_lpips_scores, 'b-', linewidth=2, label='LPIPS Score')
+    #         ax1.axvline(x=current_secret_idx, color='r', linestyle='--', linewidth=2, 
+    #                 label=f'Best View (idx={current_secret_idx})')
+    #         ax1.scatter([current_secret_idx], [current_score], color='red', s=100, zorder=5)
+    #         ax1.set_xlabel('View Index')
+    #         ax1.set_ylabel('LPIPS Score')
+    #         ax1.set_title('LPIPS Scores Across All Views')
+    #         ax1.grid(True, alpha=0.3)
+    #         ax1.legend()
+
+    #         # Plot L1 scores
+    #         ax2.plot(view_indices, all_l1_scores, 'g-', linewidth=2, label='L1 Score')
+    #         best_l1_idx = view_indices[np.argmin(all_l1_scores)]
+    #         best_l1_score = min(all_l1_scores)
+    #         ax2.axvline(x=best_l1_idx, color='orange', linestyle='--', linewidth=2, 
+    #                 label=f'Best L1 View (idx={best_l1_idx})')
+    #         ax2.scatter([best_l1_idx], [best_l1_score], color='orange', s=100, zorder=5)
+    #         ax2.set_xlabel('View Index')
+    #         ax2.set_ylabel('L1 Score')
+    #         ax2.set_title('L1 Scores Across All Views')
+    #         ax2.grid(True, alpha=0.3)
+    #         ax2.legend()
+
+    #         plt.tight_layout()
+    #         plt.savefig(image_dir / 'score_curves_comparison.png', dpi=300, bbox_inches='tight')
+    #         plt.close()
+
     #         self.secret_view_idx = current_secret_idx
+    #         # self.secret_view_idx = self.config_secret.secret_view_idx
     #         camera, data = self.datamanager.next_train_idx(self.secret_view_idx)
     #         model_outputs = self.model(camera)
     #         rendered_image = model_outputs["rgb"].detach().unsqueeze(dim=0).permute(0, 3, 1, 2)
-    #         save_image(rendered_image, image_dir / f"best_secret_view_{self.secret_view_idx}_lpips_score_{current_lpips_score}.png")
+    #         save_image(rendered_image, image_dir / f"best_secret_view_{self.secret_view_idx}_score_{current_score}.png")
 
-    #         CONSOLE.print(f"Best secret view index: {self.secret_view_idx} with LPIPS score: {current_lpips_score}")
+    #         CONSOLE.print(f"Best secret view index: {self.secret_view_idx} with score: {current_score}")
+
+    #         # start pose offset updating
+    #         # Get the secret view camera and initialize pose offset parameters
+    #         camera_secret, data_secret = self.datamanager.next_train_idx(self.secret_view_idx)
+
+    #         original_pose_backup = camera_secret.camera_to_worlds.clone()
+            
+    #         # Initialize camera pose offset parameters (6DOF: translation + rotation)
+    #         if not hasattr(self, 'camera_pose_offset'):
+    #             # Translation offset (x, y, z)
+    #             self.translation_offset = torch.zeros(3, device=camera_secret.camera_to_worlds.device, requires_grad=True)
+    #             # Rotation offset (axis-angle representation)
+    #             self.rotation_offset = torch.zeros(3, device=camera_secret.camera_to_worlds.device, requires_grad=True)
+                
+    #             # Optimizer for camera pose offset
+    #             self.pose_optimizer = torch.optim.Adam([self.translation_offset, self.rotation_offset], lr=float(self.config_secret.pose_learning_rate))
+
+    #         # # Before the pose optimization loop, store the gradient state and disable model gradients
+    #         # model_param_grad_states = {}
+    #         # for name, param in self.model.named_parameters():
+    #         #     model_param_grad_states[name] = param.requires_grad
+    #         #     param.requires_grad = False
+
+    #         # Camera pose optimization loop
+    #         num_pose_iterations = self.config_secret.num_pose_iterations
+            
+    #         for pose_iter in range(num_pose_iterations):
+    #             self.pose_optimizer.zero_grad()
+                
+    #             # Create rotation matrix from axis-angle representation
+    #             rotation_matrix = self._axis_angle_to_rotation_matrix(self.rotation_offset)
+                
+    #             # Apply rotation offset: R_new = R_offset @ R_original
+    #             original_rotation = original_pose_backup[0, :3, :3]
+    #             new_rotation = rotation_matrix @ original_rotation
+                
+    #             # Apply translation offset: t_new = t_original + t_offset
+    #             original_translation = original_pose_backup[0, :3, 3]
+    #             new_translation = original_translation + self.translation_offset
+                
+    #             # Construct new camera-to-world matrix
+    #             new_c2w = original_pose_backup.clone()
+    #             new_c2w[0, :3, :3] = new_rotation
+    #             new_c2w[0, :3, 3] = new_translation
+                
+    #             camera_secret.camera_to_worlds = new_c2w
+                
+    #             # Render with updated camera pose
+    #             with torch.enable_grad():
+    #                 model_outputs = self.model(camera_secret)
+                    
+    #                 # Compute LPIPS loss with mask
+    #                 mask_np = self.ip2p_ptd.mask
+    #                 mask_tensor = torch.from_numpy(mask_np).float()
+    #                 if len(mask_tensor.shape) == 2:
+    #                     mask_tensor = mask_tensor.unsqueeze(0)
+    #                 if mask_tensor.shape[0] == 1:
+    #                     mask_tensor = mask_tensor.repeat(3, 1, 1)
+    #                 mask_tensor = mask_tensor.unsqueeze(0)
+    #                 mask_tensor = mask_tensor.to(self.ref_image_tensor.device)
+
+    #                 model_rgb = (model_outputs["rgb"].permute(2, 0, 1).unsqueeze(0) * 2 - 1).clamp(-1, 1) # don't detach here, or the gradients won't exist
+    #                 masked_model_rgb = model_rgb * mask_tensor
+    #                 masked_ref_image = self.ref_image_tensor * mask_tensor
+                    
+    #                 lpips_loss = self.lpips_loss_fn(masked_model_rgb, masked_ref_image)
+    #                 l1_loss = torch.nn.functional.l1_loss(masked_model_rgb, masked_ref_image)
+                    
+    #                 # Add regularization to prevent large offsets
+    #                 translation_reg = torch.norm(self.translation_offset) * float(self.config_secret.translation_reg_weight)
+    #                 rotation_reg = torch.norm(self.rotation_offset) * float(self.config_secret.rotation_reg_weight)
+    #                 total_loss = lpips_loss + translation_reg + rotation_reg
+    #                 # total_loss = lpips_loss
+    #                 # total_loss = l1_loss  + translation_reg + rotation_reg
+                    
+    #                 # Backward pass and optimization step
+    #                 total_loss.backward()
+    #                 self.pose_optimizer.step()
+                
+    #             # Optional: clamp offsets to reasonable ranges
+    #             with torch.no_grad():
+    #                 self.translation_offset.clamp_(-self.config_secret.max_translation_offset, 
+    #                                             self.config_secret.max_translation_offset)
+    #                 self.rotation_offset.clamp_(-self.config_secret.max_rotation_offset, 
+    #                                         self.config_secret.max_rotation_offset)
+                
+    #             if pose_iter % 200 == 0 or pose_iter == num_pose_iterations - 1:
+    #                 with torch.no_grad():
+    #                     CONSOLE.print(
+    #                         # f"Translation gradient norm: {self.translation_offset.grad.norm().item()}",
+    #                         # f"Rotation gradient norm: {self.rotation_offset.grad.norm().item()}",
+    #                         f"Pose iter {pose_iter}: total loss = {total_loss.item():.6f}, "
+    #                         f"Trans offset norm = {torch.norm(self.translation_offset).item():.6f}, "
+    #                         f"Rot offset norm = {torch.norm(self.rotation_offset).item():.6f}"
+    #                     )
+
+    #                     rotation_matrix = self._axis_angle_to_rotation_matrix(self.rotation_offset)
+                    
+    #                     new_rotation = rotation_matrix @ original_pose_backup[0, :3, :3]
+    #                     new_translation = original_pose_backup[0, :3, 3] + self.translation_offset
+                        
+    #                     new_c2w = original_pose_backup.clone()
+    #                     new_c2w[0, :3, :3] = new_rotation
+    #                     new_c2w[0, :3, 3] = new_translation
+                        
+    #                     camera_secret.camera_to_worlds = new_c2w
+    #                     optimized_camera = camera_secret
+                        
+    #                     final_outputs = self.model(optimized_camera)
+    #                     rendered_image = final_outputs["rgb"].detach().unsqueeze(dim=0).permute(0, 3, 1, 2)
+                        
+    #                     # Compute final LPIPS score
+    #                     model_rgb = (final_outputs["rgb"].permute(2, 0, 1).unsqueeze(0) * 2 - 1).clamp(-1, 1)
+    #                     masked_model_rgb = model_rgb * mask_tensor
+                        
+    #                     save_image(rendered_image, 
+    #                             image_dir / f"optimized_secret_view_{self.secret_view_idx}_step_{pose_iter}_loss_{total_loss.item():.6f}.png")
+            
+    #         # # After optimization, restore model parameter gradient states
+    #         # for name, param in self.model.named_parameters():
+    #         #     param.requires_grad = model_param_grad_states[name]    
 
     #         # secret data preparation
-    #         self.camera_secret, self.data_secret = self.datamanager.next_train_idx(self.secret_view_idx)
-    #         self.original_image_secret = self.datamanager.original_cached_train[self.secret_view_idx]["image"].unsqueeze(dim=0).permute(0, 3, 1, 2)
-    #         self.depth_image_secret = self.datamanager.original_cached_train[self.secret_view_idx]["depth"] # [bs, h, w]
-    #         # original secret edges
-    #         self.original_secret_edges = SobelFilter(ksize=3, use_grayscale=self.config_secret.use_grayscale)(self.original_image_secret)
+    #         with torch.no_grad():
+    #             rotation_matrix = self._axis_angle_to_rotation_matrix(self.rotation_offset)
+                
+    #             new_rotation = rotation_matrix @ original_pose_backup[0, :3, :3]
+    #             new_translation = original_pose_backup[0, :3, 3] + self.translation_offset
+                
+    #             new_c2w = original_pose_backup.clone()
+    #             new_c2w[0, :3, :3] = new_rotation
+    #             new_c2w[0, :3, 3] = new_translation
+                
+    #             camera_secret.camera_to_worlds = new_c2w
+    #             optimized_camera = camera_secret
+                
+    #             final_outputs = self.model(optimized_camera)
+    #             rendered_image = final_outputs["rgb"].detach().unsqueeze(dim=0).permute(0, 3, 1, 2)  
+                
+    #             # secret data preparation
+    #             self.camera_secret, self.data_secret = optimized_camera, data_secret
+    #             self.original_image_secret = rendered_image # [bs, c, h, w]
+    #             self.depth_image_secret = final_outputs["depth"].detach().permute(2, 0, 1) # [bs, h, w]
+    #             # original secret edges
+    #             self.original_secret_edges = SobelFilter(ksize=3, use_grayscale=self.config_secret.use_grayscale)(self.original_image_secret)
 
-    #     if (not self.makeSquentialEdits):
+    #         torch.cuda.empty_cache()
+
+    #     # start editing
+    #     if (step % self.config.gs_steps) == 0 and (self.first_SequentialEdit): # update also for the first step
+    #         self.makeSequentialEdits = True
+
+    #     if (not self.makeSequentialEdits):
+    #     # if (self.makeSequentialEdits):
     #         # the implementation of randomly selecting an index to edit instead of update all images at once
     #         # generate the indexes for non-secret view editing
     #         all_indices = np.arange(len(self.datamanager.cached_train))
@@ -2543,10 +3182,423 @@ class DNSplatterPipeline(VanillaPipeline):
     #         #increment curr edit idx
     #         # and update all the images in the dataset
     #         self.curr_edit_idx += 1
-    #         # self.makeSquentialEdits = False
+    #         # self.makeSequentialEdits = False
     #         if (self.curr_edit_idx >= len(self.datamanager.cached_train)):
     #             self.curr_edit_idx = 0
-    #             self.makeSquentialEdits = False
+    #             self.makeSequentialEdits = False
+    #             self.first_SequentialEdit = False
+
+    #     return model_outputs, loss_dict, metrics_dict
+    ######################################################
+
+    # __IGS2GS_IN2N_pie_edge_ref_best__
+    # def get_train_loss_dict(self, step: int):
+    #     ######################################################
+    #     # Secret view updating                              
+    #     ######################################################
+    #     base_dir = self.trainer.base_dir
+    #     image_dir = base_dir / f"images_IGS2GS_IN2N_pie_edge_ref__best_secret_image_cond_{self.config_secret.image_guidance_scale_ip2p_ptd}_async_{self.config_secret.async_ahead_steps}_contrast_{self.ip2p_ptd.contrast}_non_secret_{self.config_secret.image_guidance_scale_ip2p}"
+    #     if not image_dir.exists():
+    #         image_dir.mkdir(parents=True, exist_ok=True)
+
+    #     # if ((step-1) % self.config.gs_steps) == 0:
+    #     if (step % self.config.gs_steps) == 0 and (self.first_SequentialEdit): # update also for the first step
+    #         self.makeSequentialEdits = True
+
+    #     if self.first_step:
+    #         self.first_step = False
+    #         # find the best secret view that align with the reference image
+    #         current_secret_idx = 0
+    #         current_lpips_score = float("inf")
+    #         for idx in tqdm(range(len(self.datamanager.cached_train))):
+    #             camera, data = self.datamanager.next_train_idx(idx)
+    #             model_outputs = self.model(camera)
+
+    #             # compute masked lpips value
+    #             mask_np = self.ip2p_ptd.mask
+    #             # Convert mask to tensor and ensure it's the right shape/device
+    #             mask_tensor = torch.from_numpy(mask_np).float()
+    #             if len(mask_tensor.shape) == 2:
+    #                 mask_tensor = mask_tensor.unsqueeze(0)  # Add channel dimension
+    #             if mask_tensor.shape[0] == 1:
+    #                 mask_tensor = mask_tensor.repeat(3, 1, 1)  # Repeat for RGB channels
+    #             mask_tensor = mask_tensor.unsqueeze(0)  # Add batch dimension
+    #             mask_tensor = mask_tensor.to(self.ref_image_tensor.device)
+
+    #             # Prepare model output
+    #             model_rgb = (model_outputs["rgb"].permute(2, 0, 1).unsqueeze(0) * 2 - 1).clamp(-1, 1)
+
+    #             # Apply mask to both images
+    #             masked_model_rgb = model_rgb * mask_tensor
+    #             masked_ref_image = self.ref_image_tensor * mask_tensor
+
+    #             # Compute masked LPIPS score
+    #             lpips_score = self.lpips_loss_fn(
+    #                 masked_model_rgb,
+    #                 masked_ref_image
+    #             ).item()
+
+    #             # # unmasked lpips score
+    #             # lpips_score = self.lpips_loss_fn(
+    #             #     (model_outputs["rgb"].permute(2, 0, 1).unsqueeze(0) * 2 - 1).clamp(-1, 1),
+    #             #     self.ref_image_tensor
+    #             # ).item()
+
+    #             if lpips_score < current_lpips_score:
+    #                 current_lpips_score = lpips_score
+    #                 current_secret_idx = idx
+
+    #         self.secret_view_idx = current_secret_idx
+    #         camera, data = self.datamanager.next_train_idx(self.secret_view_idx)
+    #         model_outputs = self.model(camera)
+    #         rendered_image = model_outputs["rgb"].detach().unsqueeze(dim=0).permute(0, 3, 1, 2)
+    #         save_image(rendered_image, image_dir / f"best_secret_view_{self.secret_view_idx}_lpips_score_{current_lpips_score}.png")
+
+    #         CONSOLE.print(f"Best secret view index: {self.secret_view_idx} with LPIPS score: {current_lpips_score}")
+
+    #         # secret data preparation
+    #         self.camera_secret, self.data_secret = self.datamanager.next_train_idx(self.secret_view_idx)
+    #         self.original_image_secret = self.datamanager.original_cached_train[self.secret_view_idx]["image"].unsqueeze(dim=0).permute(0, 3, 1, 2)
+    #         self.depth_image_secret = self.datamanager.original_cached_train[self.secret_view_idx]["depth"] # [bs, h, w]
+    #         # original secret edges
+    #         self.original_secret_edges = SobelFilter(ksize=3, use_grayscale=self.config_secret.use_grayscale)(self.original_image_secret)
+
+    #     if (not self.makeSequentialEdits):
+    #         # the implementation of randomly selecting an index to edit instead of update all images at once
+    #         # generate the indexes for non-secret view editing
+    #         all_indices = np.arange(len(self.datamanager.cached_train))
+    #         allowed = all_indices[all_indices != self.secret_view_idx]
+
+    #         if step % self.config_secret.edit_rate == 0:
+    #             #----------------non-secret view editing----------------
+    #             # randomly select an index to edit
+    #             idx = random.choice(allowed)
+    #             camera, data = self.datamanager.next_train_idx(idx)
+    #             model_outputs = self.model(camera)
+    #             metrics_dict = self.model.get_metrics_dict(model_outputs, data)
+
+    #             original_image = self.datamanager.original_cached_train[idx]["image"].unsqueeze(dim=0).permute(0, 3, 1, 2)
+    #             rendered_image = model_outputs["rgb"].detach().unsqueeze(dim=0).permute(0, 3, 1, 2)
+
+    #             depth_image = self.datamanager.original_cached_train[idx]["depth"] # [bs, h, w]
+
+    #             edited_image, depth_tensor = self.ip2p_depth.edit_image_depth(
+    #                 self.text_embeddings_ip2p.to(self.config_secret.device),
+    #                 rendered_image.to(self.dtype),
+    #                 original_image.to(self.config_secret.device).to(self.dtype),
+    #                 False, # is depth tensor
+    #                 depth_image,
+    #                 guidance_scale=self.config_secret.guidance_scale,
+    #                 image_guidance_scale=self.config_secret.image_guidance_scale_ip2p,
+    #                 diffusion_steps=self.config_secret.t_dec,
+    #                 lower_bound=self.config_secret.lower_bound,
+    #                 upper_bound=self.config_secret.upper_bound,
+    #             )
+
+    #             # resize to original image size (often not necessary)
+    #             if (edited_image.size() != rendered_image.size()):
+    #                 edited_image = torch.nn.functional.interpolate(edited_image, size=rendered_image.size()[2:], mode='bilinear')
+
+    #             # write edited image to dataloader
+    #             edited_image = edited_image.to(original_image.dtype)
+    #             self.datamanager.cached_train[idx]["image"] = edited_image.squeeze().permute(1,2,0)
+    #             data["image"] = edited_image.squeeze().permute(1,2,0)
+
+    #             # save edited non-secret image
+    #             if step % 50 == 0:
+    #                 image_save_non_secret = torch.cat([depth_tensor, rendered_image, edited_image.to(self.config_secret.device), original_image.to(self.config_secret.device)])
+    #                 save_image((image_save_non_secret).clamp(0, 1), image_dir / f'{step}_non_secret_list.png')
+
+    #             loss_dict = self.model.get_loss_dict(model_outputs, data, metrics_dict)
+
+    #             #----------------secret view editing----------------
+    #             if step % self.config_secret.secret_edit_rate == 0:
+    #                 model_outputs_secret = self.model(self.camera_secret)
+    #                 metrics_dict_secret = self.model.get_metrics_dict(model_outputs_secret, self.data_secret)
+    #                 loss_dict_secret = self.model.get_loss_dict(model_outputs_secret, self.data_secret, metrics_dict_secret)
+                    
+    #                 # edge loss
+    #                 rendered_image_secret = model_outputs_secret["rgb"].unsqueeze(dim=0).permute(0, 3, 1, 2) # don't detach the output when we want the grad to backpropagate
+    #                 edge_loss = self.edge_loss_fn(
+    #                     rendered_image_secret.to(self.config_secret.device), 
+    #                     self.ip2p_ptd.ref_img_tensor.to(self.config_secret.device),
+    #                     self.original_secret_edges.to(self.config_secret.device),
+    #                     # self.ip2p_ptd.original_edges.to(self.config_secret.device),
+    #                     image_dir,
+    #                     step
+    #                 )
+    #                 loss_dict["main_loss"] += edge_loss
+
+    #                 # ref loss, a content loss of ref image added to the original rgb (L1 + lpips loss)
+    #                 ref_loss = self.lpips_loss_fn(
+    #                     (model_outputs_secret["rgb"].permute(2, 0, 1).unsqueeze(0) * 2 - 1).clamp(-1, 1),
+    #                     self.ref_image_tensor
+    #                 ).squeeze() # need to add squeeze to make the ref_loss a scalar instead of a tensor
+    #                 loss_dict["main_loss"] += self.config_secret.ref_loss_weight * ref_loss
+                    
+    #                 rendered_image_secret = model_outputs_secret["rgb"].detach().unsqueeze(dim=0).permute(0, 3, 1, 2)
+    #                 edited_image_secret, depth_tensor_secret = self.ip2p_ptd.edit_image_depth(
+    #                     image=rendered_image_secret.to(self.dtype), # input should be B, 3, H, W, in [0, 1]
+    #                     image_cond=self.original_image_secret.to(self.config_secret.device).to(self.dtype),
+    #                     secret_idx=0,
+    #                     depth=self.depth_image_secret,
+    #                     lower_bound=self.config_secret.lower_bound,
+    #                     upper_bound=self.config_secret.upper_bound
+    #                 )
+
+    #                 # resize to original image size (often not necessary)
+    #                 if (edited_image_secret.size() != rendered_image_secret.size()):
+    #                     edited_image_secret = torch.nn.functional.interpolate(edited_image_secret, size=rendered_image_secret.size()[2:], mode='bilinear')
+
+    #                 # ###########################################
+    #                 # Convert PyTorch tensors to NumPy arrays for opencv_seamless_clone
+
+    #                 edited_image_target, depth_tensor_target = self.ip2p_depth.edit_image_depth(
+    #                     self.text_embeddings_ip2p.to(self.config_secret.device),
+    #                     rendered_image_secret.to(self.dtype),
+    #                     self.original_image_secret.to(self.config_secret.device).to(self.dtype),
+    #                     False, # is depth tensor
+    #                     self.depth_image_secret,
+    #                     guidance_scale=self.config_secret.guidance_scale,
+    #                     image_guidance_scale=self.config_secret.image_guidance_scale_ip2p,
+    #                     diffusion_steps=self.config_secret.t_dec,
+    #                     lower_bound=self.config_secret.lower_bound,
+    #                     upper_bound=self.config_secret.upper_bound,
+    #                 )
+
+    #                 # edited_image_secret is B, C, H, W in [0, 1]
+    #                 edited_image_np = edited_image_secret.squeeze(0).permute(1, 2, 0).cpu().numpy()
+    #                 edited_image_np = (edited_image_np * 255).astype(np.uint8)
+
+    #                 # Convert edited_image_target to numpy (NEW TARGET)
+    #                 edited_image_target_np = edited_image_target.squeeze(0).permute(1, 2, 0).cpu().numpy()
+    #                 edited_image_target_np = (edited_image_target_np * 255).astype(np.uint8)
+
+    #                 mask_np = self.ip2p_ptd.mask
+
+    #                 # Call the original opencv_seamless_clone function with numpy arrays
+    #                 result_np = opencv_seamless_clone(edited_image_np, edited_image_target_np, mask_np)
+
+    #                 # Convert the result back to PyTorch tensor format
+    #                 # From H, W, C in [0, 255] to B, C, H, W in [0, 1]
+    #                 edited_image_secret = torch.from_numpy(result_np).float() / 255.0
+    #                 edited_image_secret = edited_image_secret.permute(2, 0, 1).unsqueeze(0)
+    #                 edited_image_secret = edited_image_secret.to(self.config_secret.device).to(self.dtype)
+    #                 # ###########################################
+
+    #                 # write edited image to dataloader
+    #                 edited_image_secret = edited_image_secret.to(self.original_image_secret.dtype)
+    #                 self.datamanager.cached_train[self.secret_view_idx]["image"] = edited_image_secret.squeeze().permute(1,2,0)
+    #                 self.data_secret["image"] = edited_image_secret.squeeze().permute(1,2,0)
+
+    #                 for k, v in metrics_dict_secret.items():
+    #                     metrics_dict[f"secret_{k}"] = v
+    #                 for k, v in loss_dict_secret.items():
+    #                     loss_dict[f"secret_{k}"] = v
+                    
+    #                 # compute lpips score between ref image and current secret rendering
+    #                 lpips_score = self.lpips_loss_fn(
+    #                     (model_outputs_secret["rgb"].permute(2, 0, 1).unsqueeze(0) * 2 - 1).clamp(-1, 1),
+    #                     self.ref_image_tensor
+    #                 )
+    #                 # print(f"lpips score: {lpips_score.item():.6f}")
+
+    #                 # save edited secret image
+    #                 if step % 50 == 0:
+    #                     image_save_secret = torch.cat([depth_tensor_secret, rendered_image_secret, edited_image_secret.to(self.config_secret.device), self.original_image_secret.to(self.config_secret.device)])
+    #                     save_image((image_save_secret).clamp(0, 1), image_dir / f'{step}_{lpips_score.item():.6f}_secret_list.png')
+   
+    #         else:
+    #             # non-editing steps loss computing
+    #             camera, data = self.datamanager.next_train(step)
+    #             model_outputs = self.model(camera)
+    #             metrics_dict = self.model.get_metrics_dict(model_outputs, data)
+    #             loss_dict = self.model.get_loss_dict(model_outputs, data, metrics_dict)
+
+    #             # also update the secret view w/o editing (important)
+    #             model_outputs_secret = self.model(self.camera_secret)
+    #             metrics_dict_secret = self.model.get_metrics_dict(model_outputs_secret, self.data_secret)
+    #             loss_dict_secret = self.model.get_loss_dict(model_outputs_secret, self.data_secret, metrics_dict_secret)
+
+    #             # edge loss
+    #             rendered_image_secret = model_outputs_secret["rgb"].unsqueeze(dim=0).permute(0, 3, 1, 2) # don't detach the output when we want the grad to backpropagate
+    #             edge_loss = self.edge_loss_fn(
+    #                 rendered_image_secret.to(self.config_secret.device), 
+    #                 self.ip2p_ptd.ref_img_tensor.to(self.config_secret.device),
+    #                 self.original_secret_edges.to(self.config_secret.device),
+    #                 # self.ip2p_ptd.original_edges.to(self.config_secret.device),
+    #                 image_dir,
+    #                 step
+    #             )
+    #             loss_dict["main_loss"] += edge_loss
+
+    #             # ref loss, a content loss of ref image added to the original rgb (L1 + lpips loss)
+    #             ref_loss = self.lpips_loss_fn(
+    #                 (model_outputs_secret["rgb"].permute(2, 0, 1).unsqueeze(0) * 2 - 1).clamp(-1, 1),
+    #                 self.ref_image_tensor
+    #             ).squeeze() # need to add squeeze to make the ref_loss a scalar instead of a tensor
+    #             loss_dict["main_loss"] += self.config_secret.ref_loss_weight * ref_loss
+
+    #             for k, v in metrics_dict_secret.items():
+    #                 metrics_dict[f"secret_{k}"] = v
+    #             for k, v in loss_dict_secret.items():
+    #                 loss_dict[f"secret_{k}"] = v
+
+    #     else:
+    #         # get index
+    #         idx = self.curr_edit_idx
+    #         camera, data = self.datamanager.next_train_idx(idx)
+    #         model_outputs = self.model(camera)
+    #         metrics_dict = self.model.get_metrics_dict(model_outputs, data)
+
+    #         original_image = self.datamanager.original_cached_train[idx]["image"].unsqueeze(dim=0).permute(0, 3, 1, 2)
+    #         rendered_image = model_outputs["rgb"].detach().unsqueeze(dim=0).permute(0, 3, 1, 2)
+
+    #         depth_image = self.datamanager.original_cached_train[idx]["depth"] # [bs, h, w]
+            
+    #         # edit image using IP2P depth when idx != secret_view_idx
+    #         if idx != self.secret_view_idx:
+    #             edited_image, depth_tensor = self.ip2p_depth.edit_image_depth(
+    #                 self.text_embeddings_ip2p.to(self.config_secret.device),
+    #                 rendered_image.to(self.dtype),
+    #                 original_image.to(self.config_secret.device).to(self.dtype),
+    #                 False, # is depth tensor
+    #                 depth_image,
+    #                 guidance_scale=self.config_secret.guidance_scale,
+    #                 image_guidance_scale=self.config_secret.image_guidance_scale_ip2p,
+    #                 diffusion_steps=self.config_secret.t_dec,
+    #                 lower_bound=self.config_secret.lower_bound,
+    #                 upper_bound=self.config_secret.upper_bound,
+    #             )
+
+    #             # resize to original image size (often not necessary)
+    #             if (edited_image.size() != rendered_image.size()):
+    #                 edited_image = torch.nn.functional.interpolate(edited_image, size=rendered_image.size()[2:], mode='bilinear')
+
+    #             # write edited image to dataloader
+    #             edited_image = edited_image.to(original_image.dtype)
+    #             self.datamanager.cached_train[idx]["image"] = edited_image.squeeze().permute(1,2,0)
+    #             data["image"] = edited_image.squeeze().permute(1,2,0)
+
+    #             # save edited non-secret image
+    #             if step % 25 == 0:
+    #                 image_save_non_secret = torch.cat([depth_tensor, rendered_image, edited_image.to(self.config_secret.device), original_image.to(self.config_secret.device)])
+    #                 save_image((image_save_non_secret).clamp(0, 1), image_dir / f'{step}_non_secret_list.png')
+
+    #         loss_dict = self.model.get_loss_dict(model_outputs, data, metrics_dict)
+
+    #         # edit image using IP2P + PTD when idx == secret_view_idx
+    #         if idx == self.secret_view_idx:
+    #             model_outputs_secret = self.model(self.camera_secret)
+    #             metrics_dict_secret = self.model.get_metrics_dict(model_outputs_secret, self.data_secret)
+    #             loss_dict_secret = self.model.get_loss_dict(model_outputs_secret, self.data_secret, metrics_dict_secret)
+    #             rendered_image_secret = model_outputs_secret["rgb"].detach().unsqueeze(dim=0).permute(0, 3, 1, 2)
+    #             edited_image_secret, depth_tensor_secret = self.ip2p_ptd.edit_image_depth(
+    #                 image=rendered_image_secret.to(self.dtype), # input should be B, 3, H, W, in [0, 1]
+    #                 image_cond=self.original_image_secret.to(self.config_secret.device).to(self.dtype),
+    #                 secret_idx=0,
+    #                 depth=self.depth_image_secret,
+    #                 lower_bound=self.config_secret.lower_bound,
+    #                 upper_bound=self.config_secret.upper_bound
+    #             )
+
+    #             # resize to original image size (often not necessary)
+    #             if (edited_image_secret.size() != rendered_image_secret.size()):
+    #                 edited_image_secret = torch.nn.functional.interpolate(edited_image_secret, size=rendered_image_secret.size()[2:], mode='bilinear')
+
+    #             save_image((edited_image_secret.to(self.config_secret.device)).clamp(0, 1), image_dir / f'{step}_secret_image.png')
+
+    #             # ###########################################
+    #             # Convert PyTorch tensors to NumPy arrays for opencv_seamless_clone
+    #             edited_image_target, depth_tensor_target = self.ip2p_depth.edit_image_depth(
+    #                 self.text_embeddings_ip2p.to(self.config_secret.device),
+    #                 rendered_image_secret.to(self.dtype),
+    #                 self.original_image_secret.to(self.config_secret.device).to(self.dtype),
+    #                 False, # is depth tensor
+    #                 self.depth_image_secret,
+    #                 guidance_scale=self.config_secret.guidance_scale,
+    #                 image_guidance_scale=self.config_secret.image_guidance_scale_ip2p,
+    #                 diffusion_steps=self.config_secret.t_dec,
+    #                 lower_bound=self.config_secret.lower_bound,
+    #                 upper_bound=self.config_secret.upper_bound,
+    #             )
+
+    #             save_image((edited_image_target.to(self.config_secret.device)).clamp(0, 1), image_dir / f'{step}_secret_target_image.png')
+
+    #             # edited_image_secret is B, C, H, W in [0, 1]
+    #             edited_image_np = edited_image_secret.squeeze(0).permute(1, 2, 0).cpu().numpy()
+    #             edited_image_np = (edited_image_np * 255).astype(np.uint8)
+
+    #             # Convert edited_image_target to numpy (NEW TARGET)
+    #             edited_image_target_np = edited_image_target.squeeze(0).permute(1, 2, 0).cpu().numpy()
+    #             edited_image_target_np = (edited_image_target_np * 255).astype(np.uint8)
+
+    #             # Convert mask to numpy
+    #             if hasattr(self.ip2p_ptd.mask, 'cpu'):
+    #                 # It's a PyTorch tensor
+    #                 mask_tensor = self.ip2p_ptd.mask
+    #                 if mask_tensor.dim() == 4:
+    #                     mask_np = mask_tensor.squeeze(0).squeeze(0).cpu().numpy()
+    #                 elif mask_tensor.dim() == 3:
+    #                     mask_np = mask_tensor.squeeze(0).cpu().numpy()
+    #                 else:
+    #                     mask_np = mask_tensor.cpu().numpy()
+    #                 mask_np = (mask_np * 255).astype(np.uint8)
+    #             elif hasattr(self.ip2p_ptd.mask, 'save'):
+    #                 # It's a PIL Image
+    #                 mask_np = np.array(self.ip2p_ptd.mask)
+    #                 # Convert to grayscale if needed
+    #                 if mask_np.ndim == 3:
+    #                     mask_np = mask_np[:, :, 0]  # Take first channel
+    #                 # Ensure it's uint8
+    #                 if mask_np.dtype != np.uint8:
+    #                     if mask_np.max() <= 1.0:
+    #                         mask_np = (mask_np * 255).astype(np.uint8)
+    #                     else:
+    #                         mask_np = mask_np.astype(np.uint8)
+    #             else:
+    #                 # If it's already numpy, just use it
+    #                 mask_np = self.ip2p_ptd.mask
+
+    #             # Call the original opencv_seamless_clone function with numpy arrays
+    #             result_np = opencv_seamless_clone(edited_image_np, edited_image_target_np, mask_np)
+
+    #             # Convert the result back to PyTorch tensor format
+    #             # From H, W, C in [0, 255] to B, C, H, W in [0, 1]
+    #             edited_image_secret = torch.from_numpy(result_np).float() / 255.0
+    #             edited_image_secret = edited_image_secret.permute(2, 0, 1).unsqueeze(0)
+    #             edited_image_secret = edited_image_secret.to(self.config_secret.device).to(self.dtype)
+    #             # ###########################################
+
+    #             # write edited image to dataloader
+    #             edited_image_secret = edited_image_secret.to(self.original_image_secret.dtype)
+    #             self.datamanager.cached_train[self.secret_view_idx]["image"] = edited_image_secret.squeeze().permute(1,2,0)
+    #             self.data_secret["image"] = edited_image_secret.squeeze().permute(1,2,0)
+
+    #             for k, v in metrics_dict_secret.items():
+    #                 metrics_dict[f"secret_{k}"] = v
+    #             for k, v in loss_dict_secret.items():
+    #                 loss_dict[f"secret_{k}"] = v
+                
+    #             # compute lpips score between ref image and current secret rendering
+    #             lpips_score = self.lpips_loss_fn(
+    #                 (model_outputs_secret["rgb"].permute(2, 0, 1).unsqueeze(0) * 2 - 1).clamp(-1, 1),
+    #                 self.ref_image_tensor
+    #             )
+    #             # print(f"lpips score: {lpips_score.item():.6f}")
+
+    #             # save edited secret image
+    #             image_save_secret = torch.cat([depth_tensor_secret, rendered_image_secret, edited_image_secret.to(self.config_secret.device), self.original_image_secret.to(self.config_secret.device)])
+    #             save_image((image_save_secret).clamp(0, 1), image_dir / f'{step}_{lpips_score.item():.6f}_secret_list.png')
+    #             save_image((edited_image_secret.to(self.config_secret.device)).clamp(0, 1), image_dir / f'{step}_poisson_image.png')
+
+    #         #increment curr edit idx
+    #         # and update all the images in the dataset
+    #         self.curr_edit_idx += 1
+    #         # self.makeSequentialEdits = False
+    #         if (self.curr_edit_idx >= len(self.datamanager.cached_train)):
+    #             self.curr_edit_idx = 0
+    #             self.makeSequentialEdits = False
     #             self.first_SequentialEdit = False
 
     #     return model_outputs, loss_dict, metrics_dict
@@ -2564,9 +3616,9 @@ class DNSplatterPipeline(VanillaPipeline):
 
     #     # if ((step-1) % self.config.gs_steps) == 0:
     #     if (step % self.config.gs_steps) == 0 and (self.first_SequentialEdit): # update also for the first step
-    #         self.makeSquentialEdits = True
+    #         self.makeSequentialEdits = True
 
-    #     if (not self.makeSquentialEdits):
+    #     if (not self.makeSequentialEdits):
     #         # the implementation of randomly selecting an index to edit instead of update all images at once
     #         # generate the indexes for non-secret view editing
     #         all_indices = np.arange(len(self.datamanager.cached_train))
@@ -2923,10 +3975,10 @@ class DNSplatterPipeline(VanillaPipeline):
     #         #increment curr edit idx
     #         # and update all the images in the dataset
     #         self.curr_edit_idx += 1
-    #         # self.makeSquentialEdits = False
+    #         # self.makeSequentialEdits = False
     #         if (self.curr_edit_idx >= len(self.datamanager.cached_train)):
     #             self.curr_edit_idx = 0
-    #             self.makeSquentialEdits = False
+    #             self.makeSequentialEdits = False
     #             self.first_SequentialEdit = False
 
     #     return model_outputs, loss_dict, metrics_dict
@@ -2952,9 +4004,9 @@ class DNSplatterPipeline(VanillaPipeline):
 
     #     # if ((step-1) % self.config.gs_steps) == 0:
     #     if (step % self.config.gs_steps) == 0 and (self.first_SequentialEdit): # update also for the first step
-    #         self.makeSquentialEdits = True
+    #         self.makeSequentialEdits = True
 
-    #     if (not self.makeSquentialEdits):
+    #     if (not self.makeSequentialEdits):
     #         # the implementation of randomly selecting an index to edit instead of update all images at once
     #         # generate the indexes for non-secret view editing
     #         all_indices = np.arange(len(self.datamanager.cached_train))
@@ -3169,10 +4221,10 @@ class DNSplatterPipeline(VanillaPipeline):
     #         #increment curr edit idx
     #         # and update all the images in the dataset
     #         self.curr_edit_idx += 1
-    #         # self.makeSquentialEdits = False
+    #         # self.makeSequentialEdits = False
     #         if (self.curr_edit_idx >= len(self.datamanager.cached_train)):
     #             self.curr_edit_idx = 0
-    #             self.makeSquentialEdits = False
+    #             self.makeSequentialEdits = False
     #             self.first_SequentialEdit = False
 
     #     return model_outputs, loss_dict, metrics_dict
@@ -3203,9 +4255,9 @@ class DNSplatterPipeline(VanillaPipeline):
 
     #     # if ((step-1) % self.config.gs_steps) == 0:
     #     if (step % self.config.gs_steps) == 0 and (self.first_SequentialEdit): # update also for the first step
-    #         self.makeSquentialEdits = True
+    #         self.makeSequentialEdits = True
 
-    #     if (not self.makeSquentialEdits):
+    #     if (not self.makeSequentialEdits):
     #         # the implementation of randomly selecting an index to edit instead of update all images at once
     #         # generate the indexes for non-secret view editing
     #         all_indices = np.arange(len(self.datamanager.cached_train))
@@ -3452,10 +4504,10 @@ class DNSplatterPipeline(VanillaPipeline):
     #         #increment curr edit idx
     #         # and update all the images in the dataset
     #         self.curr_edit_idx += 1
-    #         # self.makeSquentialEdits = False
+    #         # self.makeSequentialEdits = False
     #         if (self.curr_edit_idx >= len(self.datamanager.cached_train)):
     #             self.curr_edit_idx = 0
-    #             self.makeSquentialEdits = False
+    #             self.makeSequentialEdits = False
     #             self.first_SequentialEdit = False
 
     #     return model_outputs, loss_dict, metrics_dict
@@ -3486,9 +4538,9 @@ class DNSplatterPipeline(VanillaPipeline):
 
     #     # if ((step-1) % self.config.gs_steps) == 0:
     #     if (step % self.config.gs_steps) == 0 and (self.first_SequentialEdit): # update also for the first step
-    #         self.makeSquentialEdits = True
+    #         self.makeSequentialEdits = True
 
-    #     if (not self.makeSquentialEdits):
+    #     if (not self.makeSequentialEdits):
     #         # the implementation of randomly selecting an index to edit instead of update all images at once
     #         # generate the indexes for non-secret view editing
     #         all_indices = np.arange(len(self.datamanager.cached_train))
@@ -3665,10 +4717,10 @@ class DNSplatterPipeline(VanillaPipeline):
     #         #increment curr edit idx
     #         # and update all the images in the dataset
     #         self.curr_edit_idx += 1
-    #         # self.makeSquentialEdits = False
+    #         # self.makeSequentialEdits = False
     #         if (self.curr_edit_idx >= len(self.datamanager.cached_train)):
     #             self.curr_edit_idx = 0
-    #             self.makeSquentialEdits = False
+    #             self.makeSequentialEdits = False
     #             self.first_SequentialEdit = False
 
     #     return model_outputs, loss_dict, metrics_dict
@@ -3800,9 +4852,9 @@ class DNSplatterPipeline(VanillaPipeline):
     
     #     # if ((step-1) % self.config.gs_steps) == 0:
     #     if (step % self.config.gs_steps) == 0: # update also for the first step
-    #         self.makeSquentialEdits = True
+    #         self.makeSequentialEdits = True
 
-    #     if (not self.makeSquentialEdits):
+    #     if (not self.makeSequentialEdits):
     #         # update the non-secret views w/o editing
     #         camera, data = self.datamanager.next_train(step)
     #         model_outputs = self.model(camera)
@@ -3918,10 +4970,10 @@ class DNSplatterPipeline(VanillaPipeline):
     #         #increment curr edit idx
     #         # and update all the images in the dataset
     #         self.curr_edit_idx += 1
-    #         # self.makeSquentialEdits = False
+    #         # self.makeSequentialEdits = False
     #         if (self.curr_edit_idx >= len(self.datamanager.cached_train)):
     #             self.curr_edit_idx = 0
-    #             self.makeSquentialEdits = False
+    #             self.makeSequentialEdits = False
 
     #     return model_outputs, loss_dict, metrics_dict
         ######################################################
