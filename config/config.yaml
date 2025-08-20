@@ -143,6 +143,9 @@ use_grayscale: True # default: True, use grayscale for edge detection; False, us
 ref_loss_weight: 2.0 #0.2 # default: 0.2, weight for ref loss, a content loss of ref image added to the original rgb (L1 + lpips loss
 non_secret_loss_weight: 1.0 # loss weight for non-secret view updating, a lower value avoids "void" areas in the secret view.
 
+# lseg loss
+lseg_loss_weight: 50.0 # default: 10.0
+
 # camera pose optimization
 pose_learning_rate: 5e-3
 num_pose_iterations: 1000

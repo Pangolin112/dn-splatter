@@ -205,8 +205,11 @@ class LSeg(BaseModel):
         return out
     
     def get_image_features(self, x):
+        # dense feature
+        # DPT head
         layer_1, layer_2, layer_3, layer_4 = forward_vit(self.pretrained, x)
 
+        # refinenet
         layer_1_rn = self.scratch.layer1_rn(layer_1)
         layer_2_rn = self.scratch.layer2_rn(layer_2)
         layer_3_rn = self.scratch.layer3_rn(layer_3)
@@ -217,8 +220,10 @@ class LSeg(BaseModel):
         path_2 = self.scratch.refinenet2(path_3, layer_2_rn)
         path_1 = self.scratch.refinenet1(path_2, layer_1_rn)
 
+        # (b, 512, h//2, w//2)
         image_features = self.scratch.head1(path_1) # shape: [B, C, H, W]
 
+        # half resolution
         return image_features
 
 
