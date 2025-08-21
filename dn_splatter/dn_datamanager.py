@@ -276,3 +276,135 @@ class DNSplatterDataManager(FullImageDatamanager):
             camera.metadata = {}
         camera.metadata["cam_idx"] = idx
         return camera, data
+
+    # dataset downsampling
+    def downsample_dataset(self, scale_factor: float, secret_idx: int = None) -> int:
+        """Downsample the dataset by a given scale factor while preserving a specific index.
+        
+        Args:
+            scale_factor: Factor by which to downsample the dataset. 
+                        E.g., 2.0 means keep 1/2 of the data, 
+                        4.0 means keep 1/4 of the data.
+            secret_idx: Index in the original dataset that must be preserved.
+                    If None, no specific index is preserved.
+        
+        Returns:
+            New index of the secret data in the downsampled dataset.
+            Returns -1 if secret_idx was None.
+        """
+        if scale_factor <= 1.0:
+            # No downsampling needed
+            return secret_idx if secret_idx is not None else -1
+        
+        # Calculate the number of samples to keep
+        original_train_size = len(self.train_dataset)
+        original_eval_size = len(self.eval_dataset)
+        
+        new_train_size = max(1, int(original_train_size / scale_factor))
+        new_eval_size = max(1, int(original_eval_size / scale_factor))
+        
+        # Generate indices for subsampling (evenly spaced to maintain temporal/spatial coverage)
+        train_indices = np.linspace(0, original_train_size - 1, new_train_size, dtype=int).tolist()
+        eval_indices = np.linspace(0, original_eval_size - 1, new_eval_size, dtype=int).tolist()
+        
+        # Handle secret_idx preservation for training set
+        new_secret_idx = -1
+        if secret_idx is not None and 0 <= secret_idx < original_train_size:
+            # Check if secret_idx is already in the sampled indices
+            if secret_idx not in train_indices:
+                # Find the best position to insert secret_idx to maintain ordering
+                insert_pos = 0
+                for i, idx in enumerate(train_indices):
+                    if idx < secret_idx:
+                        insert_pos = i + 1
+                    else:
+                        break
+                
+                # Insert the secret_idx at the appropriate position
+                train_indices.insert(insert_pos, secret_idx)
+                new_secret_idx = insert_pos
+            else:
+                # Secret_idx is already in the list, find its position
+                new_secret_idx = train_indices.index(secret_idx)
+        
+        # Sort indices to ensure proper ordering
+        train_indices = sorted(train_indices)
+        
+        # Update new_secret_idx after sorting if it was added
+        if secret_idx is not None and 0 <= secret_idx < original_train_size:
+            new_secret_idx = train_indices.index(secret_idx)
+        
+        # Downsample training dataset
+        if hasattr(self, 'cached_train'):
+            self.cached_train = [self.cached_train[i] for i in train_indices]
+        
+        if hasattr(self, 'original_cached_train'):
+            self.original_cached_train = [self.original_cached_train[i] for i in train_indices]
+        
+        # Downsample training cameras
+        if hasattr(self.train_dataset, 'cameras'):
+            self.train_dataset.cameras = self.train_dataset.cameras[train_indices]
+        
+        # Downsample other training dataset attributes if they exist
+        if hasattr(self.train_dataset, 'metadata'):
+            for key, value in self.train_dataset.metadata.items():
+                if isinstance(value, (list, np.ndarray)) and len(value) == original_train_size:
+                    if isinstance(value, list):
+                        self.train_dataset.metadata[key] = [value[i] for i in train_indices]
+                    else:
+                        self.train_dataset.metadata[key] = value[train_indices]
+        
+        # Update train dataset length
+        self.train_dataset._dataparser_outputs.dataparser_scale = scale_factor
+        if hasattr(self.train_dataset, 'image_filenames'):
+            self.train_dataset.image_filenames = [self.train_dataset.image_filenames[i] for i in train_indices]
+        
+        # Downsample evaluation dataset
+        if hasattr(self, 'cached_eval'):
+            self.cached_eval = [self.cached_eval[i] for i in eval_indices]
+        
+        if hasattr(self, 'original_cached_eval'):
+            self.original_cached_eval = [self.original_cached_eval[i] for i in eval_indices]
+        
+        # Downsample evaluation cameras
+        if hasattr(self.eval_dataset, 'cameras'):
+            self.eval_dataset.cameras = self.eval_dataset.cameras[eval_indices]
+        
+        # Downsample other eval dataset attributes if they exist
+        if hasattr(self.eval_dataset, 'metadata'):
+            for key, value in self.eval_dataset.metadata.items():
+                if isinstance(value, (list, np.ndarray)) and len(value) == original_eval_size:
+                    if isinstance(value, list):
+                        self.eval_dataset.metadata[key] = [value[i] for i in eval_indices]
+                    else:
+                        self.eval_dataset.metadata[key] = value[eval_indices]
+        
+        # Update eval dataset length
+        if hasattr(self.eval_dataset, 'image_filenames'):
+            self.eval_dataset.image_filenames = [self.eval_dataset.image_filenames[i] for i in eval_indices]
+        
+        # Reset the unseen camera lists with new indices
+        self.train_unseen_cameras = list(range(len(train_indices)))
+        self.eval_unseen_cameras = list(range(len(eval_indices)))
+        
+        # Update any depth, normal, and confidence filenames in metadata
+        if hasattr(self.train_dataparser_outputs, 'metadata'):
+            metadata = self.train_dataparser_outputs.metadata
+            
+            # List of filename keys that might need updating
+            filename_keys = ['depth_filenames', 'sensor_depth_filenames', 
+                            'mono_depth_filenames', 'normal_filenames', 
+                            'confidence_filenames']
+            
+            for key in filename_keys:
+                if key in metadata and metadata[key] is not None:
+                    if len(metadata[key]) == original_train_size:
+                        metadata[key] = [metadata[key][i] for i in train_indices]
+        
+        print(f"Dataset downsampled by factor {scale_factor}:")
+        print(f"  Training set: {original_train_size} -> {len(train_indices)} images")
+        print(f"  Evaluation set: {original_eval_size} -> {new_eval_size} images")
+        if secret_idx is not None and new_secret_idx >= 0:
+            print(f"  Secret index preserved: {secret_idx} -> {new_secret_idx}")
+        
+        return new_secret_idx

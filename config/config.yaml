@@ -114,7 +114,7 @@ secret_edit_rate: 10 #20
 
 interpolate_scale: 1.0 # default: 1.0, no interpolation; 0.0, full interpolation
 
-secret_view_idx: 6 #30 for scene 0cf2e9402d #6
+secret_view_idx: 30 #for scene 0cf2e9402d #6
 secret_view_idx_2: 50
 secret_loss_weight: 1.0
 secret_weight: 0.5 # default: 0.5
@@ -144,7 +144,7 @@ ref_loss_weight: 2.0 #0.2 # default: 0.2, weight for ref loss, a content loss of
 non_secret_loss_weight: 1.0 # loss weight for non-secret view updating, a lower value avoids "void" areas in the secret view.
 
 # lseg loss
-lseg_loss_weight: 50.0 # default: 10.0
+lseg_loss_weight: 10.0 # default: 10.0
 
 # camera pose optimization
 pose_learning_rate: 5e-3
