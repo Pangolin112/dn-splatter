@@ -343,7 +343,9 @@ class DNSplatterDataManager(FullImageDatamanager):
         
         # Downsample training cameras
         if hasattr(self.train_dataset, 'cameras'):
-            self.train_dataset.cameras = self.train_dataset.cameras[train_indices]
+            # Convert list to tensor for proper indexing
+            indices_tensor = torch.tensor(train_indices, dtype=torch.long)
+            self.train_dataset.cameras = self.train_dataset.cameras[indices_tensor]
         
         # Downsample other training dataset attributes if they exist
         if hasattr(self.train_dataset, 'metadata'):
@@ -355,9 +357,16 @@ class DNSplatterDataManager(FullImageDatamanager):
                         self.train_dataset.metadata[key] = value[train_indices]
         
         # Update train dataset length
-        self.train_dataset._dataparser_outputs.dataparser_scale = scale_factor
-        if hasattr(self.train_dataset, 'image_filenames'):
-            self.train_dataset.image_filenames = [self.train_dataset.image_filenames[i] for i in train_indices]
+        if hasattr(self.train_dataset, '_dataparser_outputs'):
+            self.train_dataset._dataparser_outputs.dataparser_scale = scale_factor
+            
+            # Update image filenames in dataparser outputs if they exist
+            if hasattr(self.train_dataset._dataparser_outputs, 'image_filenames'):
+                original_filenames = self.train_dataset._dataparser_outputs.image_filenames
+                if original_filenames is not None:
+                    self.train_dataset._dataparser_outputs.image_filenames = [
+                        original_filenames[i] for i in train_indices
+                    ]
         
         # Downsample evaluation dataset
         if hasattr(self, 'cached_eval'):
@@ -368,7 +377,9 @@ class DNSplatterDataManager(FullImageDatamanager):
         
         # Downsample evaluation cameras
         if hasattr(self.eval_dataset, 'cameras'):
-            self.eval_dataset.cameras = self.eval_dataset.cameras[eval_indices]
+            # Convert list to tensor for proper indexing
+            eval_indices_tensor = torch.tensor(eval_indices, dtype=torch.long)
+            self.eval_dataset.cameras = self.eval_dataset.cameras[eval_indices_tensor]
         
         # Downsample other eval dataset attributes if they exist
         if hasattr(self.eval_dataset, 'metadata'):
@@ -380,8 +391,14 @@ class DNSplatterDataManager(FullImageDatamanager):
                         self.eval_dataset.metadata[key] = value[eval_indices]
         
         # Update eval dataset length
-        if hasattr(self.eval_dataset, 'image_filenames'):
-            self.eval_dataset.image_filenames = [self.eval_dataset.image_filenames[i] for i in eval_indices]
+        if hasattr(self.eval_dataset, '_dataparser_outputs'):
+            # Update image filenames in dataparser outputs if they exist
+            if hasattr(self.eval_dataset._dataparser_outputs, 'image_filenames'):
+                original_filenames = self.eval_dataset._dataparser_outputs.image_filenames
+                if original_filenames is not None:
+                    self.eval_dataset._dataparser_outputs.image_filenames = [
+                        original_filenames[i] for i in eval_indices
+                    ]
         
         # Reset the unseen camera lists with new indices
         self.train_unseen_cameras = list(range(len(train_indices)))
