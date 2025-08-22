@@ -82,10 +82,10 @@ with torch.no_grad():
 
     # outputs = [evaluator.forward(image.to("cuda"), labels)] # need to add this bracelet to make it a list
 
-    # outputs = [model(image.to("cuda"), labels)[0].unsqueeze(0)] # poorer results than the above outputs
+    outputs = [model(image.to("cuda"), labels)[0].unsqueeze(0)] # poorer results than the above outputs
 
     # [1, 512, 256, 256]
-    outputs = model.net.get_image_features(image.to("cuda"))
+    # outputs = model.net.get_image_features(image.to("cuda"))
     # print(outputs)
 
     predicts = [

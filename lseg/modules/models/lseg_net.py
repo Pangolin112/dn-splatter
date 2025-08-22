@@ -11,6 +11,15 @@ import numpy as np
 import pandas as pd
 import os
 
+import matplotlib.pyplot as plt
+from einops import rearrange
+LABELS = ['monitor', 'cabinet', 'floor', 'ceiling', 'chair', 'table', 'wall', 'other']
+# LABELS = ['wall', 'floor', 'ceiling', 'chair', 'table', 'sofa', 'bed', 'other']
+NUM_LABELS = len(LABELS) + 1
+PALLETE = plt.cm.get_cmap('tab10', NUM_LABELS)
+COLORS_LIST = [PALLETE(i)[:3] for i in range(NUM_LABELS)]
+COLORS = torch.tensor(COLORS_LIST, dtype=torch.float32)
+
 class depthwise_clipseg_conv(nn.Module):
     def __init__(self):
         super(depthwise_clipseg_conv, self).__init__()
@@ -225,6 +234,47 @@ class LSeg(BaseModel):
 
         # half resolution
         return image_features
+
+    @torch.no_grad()
+    def decode_feature(self, image_features, labelset=LABELS):
+        # image_features = self.scratch.head1(path_1)
+        imshape = image_features.shape
+        
+        # encode text
+        if labelset == '':
+            text = self.text
+        else:
+            text = clip.tokenize(labelset)
+        
+        self.logit_scale = self.logit_scale.to(image_features.device)
+        text = text.to(image_features.device)
+        text_features = self.clip_pretrained.encode_text(text)
+        image_features = image_features.permute(0,2,3,1).reshape(-1, self.out_c)
+        
+        # normalized features
+        image_features = image_features / image_features.norm(dim=-1, keepdim=True)
+        text_features = text_features / text_features.norm(dim=-1, keepdim=True)
+        
+        logits_per_image = self.logit_scale * image_features.half() @ text_features.t()
+        out = logits_per_image.float().view(imshape[0], imshape[2], imshape[3], -1).permute(0,3,1,2)
+
+        if self.arch_option in [1, 2]:
+            for _ in range(self.block_depth - 1):
+                out = self.scratch.head_block(out)
+            out = self.scratch.head_block(out, False)
+
+        # if self.half_res:
+        #     out = self.scratch.output_conv(out)
+
+        out = self.scratch.output_conv(out)
+            
+        return out
+
+    def visualize_sem(self, logits):
+        semantic_map = torch.argmax(logits, dim=1) + 1
+        mask = COLORS[semantic_map.cpu()]
+        mask = rearrange(mask, 'b h w c -> b c h w')
+        return mask.squeeze(0)
 
 
 class LSegNet(LSeg):

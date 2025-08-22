@@ -240,6 +240,7 @@ class DNSplatterPipeline(VanillaPipeline):
         # secret data preparation
         secret_view_idx = self.config_secret.secret_view_idx
         self.camera_secret, self.data_secret = self.datamanager.next_train_idx(secret_view_idx)
+        # 1st stage secret view rendering
         self.original_image_secret = self.datamanager.original_cached_train[secret_view_idx]["image"].unsqueeze(dim=0).permute(0, 3, 1, 2)
         self.depth_image_secret = self.datamanager.original_cached_train[secret_view_idx]["depth"] # [bs, h, w]
         # original secret edges
@@ -610,7 +611,11 @@ class DNSplatterPipeline(VanillaPipeline):
     #         rendered_image_secret = model_outputs_secret["rgb"].unsqueeze(0).permute(0, 3, 1, 2) # don't detach the output when we want the grad to backpropagate
     #         # [1, 512, 256, 256]
     #         rendered_image_sem_feature = self.lseg_model.get_image_features(rendered_image_secret.to(self.config_secret.device))
-            
+    #         rendered_image_logits = self.lseg_model.decode_feature(rendered_image_sem_feature)
+    #         rendered_semantic = self.lseg_model.visualize_sem(rendered_image_logits) # (c, h, w)
+    #         if step % 50 == 0:
+    #             save_image(rendered_semantic, image_dir / f'{step}_rendered_semantic.png')
+
     #         # l1 loss
     #         # lseg_loss = torch.nn.functional.l1_loss(rendered_image_sem_feature, self.original_image_sem_feature)
     #         # cross loss
@@ -713,7 +718,12 @@ class DNSplatterPipeline(VanillaPipeline):
             print("dataset replacement complete!")
 
             # dataset downsampling and return the new secret idx
-            self.config_secret.secret_view_idx = self.datamanager.downsample_dataset(10.0, self.config_secret.secret_view_idx)
+            self.config_secret.secret_view_idx = self.datamanager.downsample_dataset(self.config_secret.downsample_factor, self.config_secret.secret_view_idx)
+            # save original semantic map
+            original_image_logits = self.lseg_model.decode_feature(self.original_image_sem_feature)
+            original_semantic = self.lseg_model.visualize_sem(original_image_logits) # (c, h, w)
+            save_image(original_semantic, image_dir / f'{step}_original_semantic.png')
+            save_image(self.original_image_secret, image_dir / f'{step}_original_image.png')
 
         # start editing
         if (step % self.config.gs_steps) == 0 and (self.first_SequentialEdit): # update also for the first step
@@ -776,7 +786,11 @@ class DNSplatterPipeline(VanillaPipeline):
                 rendered_image_secret = model_outputs_secret["rgb"].unsqueeze(0).permute(0, 3, 1, 2) # don't detach the output when we want the grad to backpropagate
                 # [1, 512, 256, 256]
                 rendered_image_sem_feature = self.lseg_model.get_image_features(rendered_image_secret.to(self.config_secret.device))
-                
+                rendered_image_logits = self.lseg_model.decode_feature(rendered_image_sem_feature)
+                rendered_semantic = self.lseg_model.visualize_sem(rendered_image_logits) # (c, h, w)
+                if step % 50 == 0:
+                    save_image(rendered_semantic, image_dir / f'{step}_rendered_semantic.png')
+
                 # l1 loss
                 # lseg_loss = torch.nn.functional.l1_loss(rendered_image_sem_feature, self.original_image_sem_feature)
                 # cross loss

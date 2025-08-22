@@ -153,3 +153,6 @@ translation_reg_weight: 1e-4
 rotation_reg_weight: 1e-4
 max_translation_offset: 0.3  # Adjust based on your scene scale
 max_rotation_offset: 0.3     # Radians
+
+# dataset downsample
+downsample_factor: 40.0 
