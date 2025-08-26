@@ -321,6 +321,7 @@ class IP2P_PTD(nn.Module):
         # generate the ref_latent
         # self.ref_name = "tum_white.png"
         # self.ref_name = "tum_black.png"
+        # self.ref_name = "tum_blue.png"
         # self.ref_name = "face1.jpg"
         # self.ref_name = "face2.jpg"
         self.ref_name = "yellow_dog.jpg"
@@ -329,7 +330,7 @@ class IP2P_PTD(nn.Module):
         # self.ref_name = "space_ship.png"
 
         self.t_enc = 1000
-        if self.ref_name == "tum_white.png" or self.ref_name == "tum_black.png":
+        if self.ref_name == "tum_white.png" or self.ref_name == "tum_black.png" or self.ref_name == "tum_blue.png":
             self.add_noise = True #False for normal images, True for sharp images
         else:
             self.add_noise = False
@@ -380,7 +381,7 @@ class IP2P_PTD(nn.Module):
         # Select mask with most pixels
         mask_pixel_counts = [np.sum(mask) for mask in masks]
         max_pixels_idx = np.argmax(mask_pixel_counts)
-        if self.ref_name == "tum_white.png" or self.ref_name == "tum_black.png":
+        if self.ref_name == "tum_white.png" or self.ref_name == "tum_black.png" or self.ref_name == "tum_blue.png":
             self.mask = masks[0]  # use the first mask for tum_white
         else:
             self.mask = masks[max_pixels_idx]

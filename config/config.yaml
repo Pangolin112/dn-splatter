@@ -138,9 +138,10 @@ l1_weight: 0.5 # default: 0.5, weight for L1 loss
 
 # edge loss
 use_grayscale: True # default: True, use grayscale for edge detection; False, use RGB edges
+edge_loss_weight: 10.0 # default 1.0 (at first around 0.2)
 
 # ref loss
-ref_loss_weight: 2.0 #0.2 # default: 0.2, weight for ref loss, a content loss of ref image added to the original rgb (L1 + lpips loss
+ref_loss_weight: 2.0 # default: 2.0, weight for ref loss, a content loss of ref image added to the original rgb (L1 + lpips loss
 non_secret_loss_weight: 1.0 # loss weight for non-secret view updating, a lower value avoids "void" areas in the secret view.
 
 # lseg loss
