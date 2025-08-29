@@ -181,3 +181,32 @@ class NormalMetrics(nn.Module):
             torch.abs(gt.view(b, c, -1) - pred.view(b, c, -1))
         ).mean()
         return mae, rmse, mean_err, med_err
+    
+
+class SecretViewMetrics(nn.Module):
+    """Computation of error metrics between rendered secret view, reference image image and original image
+
+    Input:
+        pred: predicted image [B, C, H, W]
+        gt: ground truth image [B, C, H, W]
+
+    Returns:
+        masked LPIPS
+    """
+
+    def __init__(self, **kwargs):
+        super().__init__()
+
+        self.lpips = LearnedPerceptualImagePatchSimilarity()
+
+    @torch.no_grad()
+    def forward(self, pred, gt, mask):
+        self.device = pred.device
+        self.lpips.to(self.device)
+
+        lpips_score = self.lpips(pred * mask, gt * mask)
+
+        return (lpips_score)
+    
+
+

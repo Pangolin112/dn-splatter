@@ -16,7 +16,7 @@ from torchmetrics.image import PeakSignalNoiseRatio, StructuralSimilarityIndexMe
 from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity
 
 from dn_splatter.losses import DepthLoss, DepthLossType, TVLoss
-from dn_splatter.metrics import DepthMetrics, NormalMetrics, RGBMetrics
+from dn_splatter.metrics import DepthMetrics, NormalMetrics, RGBMetrics, SecretViewMetrics
 from dn_splatter.regularization_strategy import (
     DNRegularization,
 )
@@ -190,6 +190,11 @@ class DNSplatterModel(SplatfactoModel):
         self.rgb_metrics = RGBMetrics()
         self.depth_metrics = DepthMetrics()
         self.normal_metrics = NormalMetrics()
+
+        # ######### secret view metrics ##############
+        self.secret_metrics = SecretViewMetrics()
+        # ######### secret view metrics ##############
+
         distances, indices = self.k_nearest_sklearn(means.data, 3)
         distances = torch.from_numpy(distances)
         # find the average of the three nearest neighbors for each point and use that as the scale
@@ -833,6 +838,125 @@ class DNSplatterModel(SplatfactoModel):
 
     def get_image_metrics_and_images(
         self, outputs: Dict[str, torch.Tensor], batch: Dict[str, torch.Tensor]
+    ) -> Tuple[Dict[str, float], Dict[str, torch.Tensor]]:
+        """Main function for eval/test images
+
+        Args:
+            image_idx: Index of the image.
+            step: Current step.
+            batch: Batch of data.
+            outputs: Outputs of the model.
+
+        Returns:
+            A dictionary of metrics.
+        """
+
+        gt_rgb = batch["image"].to(self.device)
+        predicted_rgb = (
+            outputs["rgb"][0, ...] if outputs["rgb"].dim() == 4 else outputs["rgb"]
+        )
+        predicted_depth = (
+            outputs["depth"][0, ...]
+            if outputs["depth"].dim() == 4
+            else outputs["depth"]
+        )
+        predicted_normal = (
+            outputs["normal"][0, ...]
+            if outputs["normal"].dim() == 4
+            else outputs["normal"]
+        )
+
+        combined_rgb = torch.cat([gt_rgb, predicted_rgb], dim=1)
+        combined_depth = (
+            predicted_depth  # a placeholder if no sensor depth is available
+        )
+        combined_normal = predicted_normal  # a placeholder if no gt normal is available
+
+        # Switch images from [H, W, C] to [1, C, H, W] for metrics computations
+        gt_rgb = torch.moveaxis(gt_rgb, -1, 0)[None, ...]
+        predicted_rgb = torch.moveaxis(predicted_rgb, -1, 0)[None, ...]
+
+        if "mask" in batch:
+            mask = batch["mask"].to(self.device)
+            gt_rgb = gt_rgb * mask
+            predicted_rgb = predicted_rgb * mask
+
+        psnr = self.psnr(gt_rgb, predicted_rgb)
+        ssim = self.ssim(gt_rgb, predicted_rgb)
+        lpips = self.lpips(gt_rgb, predicted_rgb)
+
+        # all of these metrics will be logged as scalars
+        metrics_dict = {
+            "rgb_psnr": float(psnr.item()),
+            "rgb_ssim": float(ssim),
+        }  # type: ignore
+        metrics_dict["rgb_lpips"] = float(lpips)
+
+        predicted_depth = outputs["depth"]
+        if "sensor_depth" in batch:
+            gt_depth = batch["sensor_depth"].to(self.device)
+
+            if predicted_depth.shape[:2] != gt_depth.shape[:2]:
+                predicted_depth = TF.resize(
+                    predicted_depth.permute(2, 0, 1), gt_depth.shape[:2], antialias=None
+                ).permute(1, 2, 0)
+
+            gt_depth = gt_depth.to(torch.float32)  # it is in float64 previous
+
+            if "mask" in batch:
+                gt_depth = gt_depth * mask
+                predicted_depth = predicted_depth * mask
+
+            # add depth eval metrics
+
+            (abs_rel, sq_rel, rmse, rmse_log, a1, a2, a3) = self.depth_metrics(
+                predicted_depth.permute(2, 0, 1), gt_depth.permute(2, 0, 1)
+            )
+            depth_metrics = {
+                "depth_abs_rel": float(abs_rel.item()),
+                "depth_sq_rel": float(sq_rel.item()),
+                "depth_rmse": float(rmse.item()),
+                "depth_rmse_log": float(rmse_log.item()),
+                "depth_a1": float(a1.item()),
+                "depth_a2": float(a2.item()),
+                "depth_a3": float(a3.item()),
+            }
+            metrics_dict.update(depth_metrics)
+            combined_depth = torch.cat([gt_depth, predicted_depth], dim=1)
+
+        if "normal" in batch:
+            gt_normal = batch["normal"].to(self.device)
+
+            if gt_normal.shape != predicted_normal.shape:
+                predicted_normal = TF.resize(
+                    predicted_normal.permute(2, 0, 1),
+                    gt_normal.shape[:2],
+                    antialias=None,
+                ).permute(1, 2, 0)
+
+            (mae, rmse, mean_err, med_err) = self.normal_metrics(
+                predicted_normal.permute(2, 0, 1).unsqueeze(0),
+                gt_normal.permute(2, 0, 1).unsqueeze(0),
+            )
+            normal_metrics = {
+                "normal_mae": float(mae.item()),
+                "normal_rsme": float(rmse.item()),
+                "normal_mean_err": float(mean_err.item()),
+                "normal_med_err": float(med_err.item()),
+            }
+            metrics_dict.update(normal_metrics)
+            combined_normal = torch.cat([gt_normal, predicted_normal], dim=1)
+
+        images_dict = {
+            "img": combined_rgb,
+            "depth": combined_depth,
+            "normal": combined_normal,
+        }
+
+        return metrics_dict, images_dict
+    
+    def get_secret_metrics_and_images(
+        self, outputs: Dict[str, torch.Tensor], batch: Dict[str, torch.Tensor], ref_image, ref_mask
     ) -> Tuple[Dict[str, float], Dict[str, torch.Tensor]]:
         """Main function for eval/test images
 
