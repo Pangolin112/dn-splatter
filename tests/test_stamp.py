@@ -5,6 +5,10 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+import nerfstudio.scripts.render
+
+import nerfstudio.data.dataparsers.base_dataparser
+
 class SobelFilter(nn.Module):
     def __init__(self, ksize=3, use_grayscale=False):
         super(SobelFilter, self).__init__()

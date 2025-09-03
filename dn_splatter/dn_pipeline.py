@@ -92,6 +92,9 @@ from seva.utils import load_model
 from dn_splatter.utils.lseg_utils import lseg_module_init
 from torchmetrics.segmentation import MeanIoU
 
+# sam 2
+from sam2.sam2_image_predictor import SAM2ImagePredictor
+
 # clip
 import open_clip
 
@@ -254,6 +257,12 @@ class DNSplatterPipeline(VanillaPipeline):
         self.lseg_model = lseg_module_init()
         with torch.no_grad():
             self.original_image_sem_feature = self.lseg_model.get_image_features(self.original_image_secret.to(self.config_secret.device))
+
+        # sam2 model
+        self.sam2_predictor = SAM2ImagePredictor.from_pretrained("facebook/sam2.1-hiera-large")
+        with torch.no_grad():
+            self.sam2_predictor.set_image(self.original_image_secret.to(self.config_secret.device))
+            self.original_image_sam2_feature = self.sam2_predictor._features
 
         # miou metric
         self.miou = MeanIoU(
@@ -832,76 +841,76 @@ class DNSplatterPipeline(VanillaPipeline):
     ############################################################################################################
     # start: 2nd stage: secret + non-secret loss + masked fighting (ref, original) loss
     ############################################################################################################
-    # def get_train_loss_dict(self, step: int):
-    #     base_dir = self.trainer.base_dir
-    #     image_dir = base_dir / f"3_stage_2nd_images_only_secret_loss_fighting_ref_original_{self.config_secret.image_guidance_scale_ip2p_ptd}_{self.config_secret.secret_edit_rate}_non_secret_{self.config_secret.image_guidance_scale_ip2p}_{self.config_secret.edit_rate}"
-    #     if not image_dir.exists():
-    #         image_dir.mkdir(parents=True, exist_ok=True)
+    def get_train_loss_dict(self, step: int):
+        base_dir = self.trainer.base_dir
+        image_dir = base_dir / f"3_stage_2nd_images_only_secret_loss_fighting_ref_original_{self.config_secret.image_guidance_scale_ip2p_ptd}_{self.config_secret.secret_edit_rate}_non_secret_{self.config_secret.image_guidance_scale_ip2p}_{self.config_secret.edit_rate}"
+        if not image_dir.exists():
+            image_dir.mkdir(parents=True, exist_ok=True)
 
-    #     # non-editing steps loss computing
-    #     camera, data = self.datamanager.next_train(step)
-    #     model_outputs = self.model(camera)
-    #     metrics_dict = self.model.get_metrics_dict(model_outputs, data)
-    #     loss_dict = self.model.get_loss_dict(model_outputs, data, metrics_dict)
+        # non-editing steps loss computing
+        camera, data = self.datamanager.next_train(step)
+        model_outputs = self.model(camera)
+        metrics_dict = self.model.get_metrics_dict(model_outputs, data)
+        loss_dict = self.model.get_loss_dict(model_outputs, data, metrics_dict)
 
-    #     # update the secret view every secret_edit_rate steps
-    #     # if step % self.config_secret.secret_edit_rate == 0:
-    #     if step % self.config_secret.secret_update_rate == 0:
-    #         model_outputs_secret = self.model(self.camera_secret)
-    #         metrics_dict_secret = self.model.get_metrics_dict(model_outputs_secret, self.data_secret)
-    #         loss_dict_secret = self.model.get_loss_dict(model_outputs_secret, self.data_secret, metrics_dict_secret) # l1, lpips, regularization
+        # update the secret view every secret_edit_rate steps
+        # if step % self.config_secret.secret_edit_rate == 0:
+        if step % self.config_secret.secret_update_rate == 0:
+            model_outputs_secret = self.model(self.camera_secret)
+            metrics_dict_secret = self.model.get_metrics_dict(model_outputs_secret, self.data_secret)
+            loss_dict_secret = self.model.get_loss_dict(model_outputs_secret, self.data_secret, metrics_dict_secret) # l1, lpips, regularization
 
-    #         # compute masked lpips value
-    #         mask_np = self.ip2p_ptd.mask
-    #         # Convert mask to tensor and ensure it's the right shape/device
-    #         mask_tensor = torch.from_numpy(mask_np).float()
-    #         if len(mask_tensor.shape) == 2:
-    #             mask_tensor = mask_tensor.unsqueeze(0)  # Add channel dimension
-    #         if mask_tensor.shape[0] == 1:
-    #             mask_tensor = mask_tensor.repeat(3, 1, 1)  # Repeat for RGB channels
-    #         mask_tensor = mask_tensor.unsqueeze(0)  # Add batch dimension
-    #         mask_tensor = mask_tensor.to(self.ref_image_tensor.device)
+            # compute masked lpips value
+            mask_np = self.ip2p_ptd.mask
+            # Convert mask to tensor and ensure it's the right shape/device
+            mask_tensor = torch.from_numpy(mask_np).float()
+            if len(mask_tensor.shape) == 2:
+                mask_tensor = mask_tensor.unsqueeze(0)  # Add channel dimension
+            if mask_tensor.shape[0] == 1:
+                mask_tensor = mask_tensor.repeat(3, 1, 1)  # Repeat for RGB channels
+            mask_tensor = mask_tensor.unsqueeze(0)  # Add batch dimension
+            mask_tensor = mask_tensor.to(self.ref_image_tensor.device)
 
-    #         # Prepare model output
-    #         model_rgb_secret = (model_outputs_secret["rgb"].permute(2, 0, 1).unsqueeze(0) * 2 - 1).clamp(-1, 1)
+            # Prepare model output
+            model_rgb_secret = (model_outputs_secret["rgb"].permute(2, 0, 1).unsqueeze(0) * 2 - 1).clamp(-1, 1)
 
-    #         # Apply mask to both images
-    #         masked_model_rgb = model_rgb_secret * mask_tensor
-    #         masked_ref_image = self.ref_image_tensor * mask_tensor
+            # Apply mask to both images
+            masked_model_rgb = model_rgb_secret * mask_tensor
+            masked_ref_image = self.ref_image_tensor * mask_tensor
 
-    #         # ref loss, a content loss of ref image added to the original rgb (L1 + lpips loss)
-    #         ref_loss = self.lpips_loss_fn(
-    #             masked_model_rgb,
-    #             masked_ref_image
-    #         ).squeeze() # need to add squeeze to make the ref_loss a scalar instead of a tensor
-    #         ref_l1_loss = torch.nn.functional.l1_loss(
-    #             masked_model_rgb,
-    #             masked_ref_image
-    #         )
-    #         loss_dict_secret["main_loss"] += self.config_secret.ref_loss_weight * ref_loss + ref_l1_loss
+            # ref loss, a content loss of ref image added to the original rgb (L1 + lpips loss)
+            ref_loss = self.lpips_loss_fn(
+                masked_model_rgb,
+                masked_ref_image
+            ).squeeze() # need to add squeeze to make the ref_loss a scalar instead of a tensor
+            ref_l1_loss = torch.nn.functional.l1_loss(
+                masked_model_rgb,
+                masked_ref_image
+            )
+            loss_dict_secret["main_loss"] += self.config_secret.ref_loss_weight * ref_loss + ref_l1_loss
 
-    #         # edge loss
-    #         # rendered_image_secret = model_outputs_secret["rgb"].unsqueeze(0).permute(0, 3, 1, 2) # don't detach the output when we want the grad to backpropagate
-    #         # edge_loss = self.edge_loss_fn(
-    #         #     rendered_image_secret.to(self.config_secret.device), 
-    #         #     self.ip2p_ptd.ref_img_tensor.to(self.config_secret.device),
-    #         #     self.original_secret_edges.to(self.config_secret.device),
-    #         #     image_dir,
-    #         #     step
-    #         # )
-    #         # loss_dict_secret["main_loss"] += edge_loss
+            # edge loss
+            # rendered_image_secret = model_outputs_secret["rgb"].unsqueeze(0).permute(0, 3, 1, 2) # don't detach the output when we want the grad to backpropagate
+            # edge_loss = self.edge_loss_fn(
+            #     rendered_image_secret.to(self.config_secret.device), 
+            #     self.ip2p_ptd.ref_img_tensor.to(self.config_secret.device),
+            #     self.original_secret_edges.to(self.config_secret.device),
+            #     image_dir,
+            #     step
+            # )
+            # loss_dict_secret["main_loss"] += edge_loss
 
-    #         if step % 100 == 0:
-    #             image_save_secret = torch.cat([model_outputs_secret["rgb"].detach().permute(2, 0, 1).unsqueeze(0), ((masked_ref_image + 1) / 2).to(self.config_secret.device), self.original_image_secret.to(self.config_secret.device)])
-    #             save_image((image_save_secret).clamp(0, 1), image_dir / f'{step}_secret_list.png')
+            if step % 100 == 0:
+                image_save_secret = torch.cat([model_outputs_secret["rgb"].detach().permute(2, 0, 1).unsqueeze(0), ((masked_ref_image + 1) / 2).to(self.config_secret.device), self.original_image_secret.to(self.config_secret.device)])
+                save_image((image_save_secret).clamp(0, 1), image_dir / f'{step}_secret_list.png')
 
-    #         # put the secret metrics and loss into the main dict
-    #         for k, v in metrics_dict_secret.items():
-    #             metrics_dict[f"secret_{k}"] = v
-    #         for k, v in loss_dict_secret.items():
-    #             loss_dict[f"secret_{k}"] = v
+            # put the secret metrics and loss into the main dict
+            for k, v in metrics_dict_secret.items():
+                metrics_dict[f"secret_{k}"] = v
+            for k, v in loss_dict_secret.items():
+                loss_dict[f"secret_{k}"] = v
 
-    #     return model_outputs, loss_dict, metrics_dict
+        return model_outputs, loss_dict, metrics_dict
     ############################################################################################################
     # end: 2nd stage: secret + non-secret loss + masked fighting (ref, original) loss
     ############################################################################################################
@@ -990,7 +999,6 @@ class DNSplatterPipeline(VanillaPipeline):
 
                 loss_dict = self.model.get_loss_dict(model_outputs, data, metrics_dict)
 
-                # update secret view fully
                 ############################ update secret view fully ########################
                 model_outputs_secret = self.model(self.camera_secret)
                 metrics_dict_secret = self.model.get_metrics_dict(model_outputs_secret, self.data_secret)
@@ -1010,35 +1018,35 @@ class DNSplatterPipeline(VanillaPipeline):
                 ############################ prepare secret rendering ######################## 
 
                 ############################ for edge loss ########################
-                # compute masked lpips value
-                mask_np = self.ip2p_ptd.mask
-                # Convert mask to tensor and ensure it's the right shape/device
-                mask_tensor = torch.from_numpy(mask_np).float()
-                if len(mask_tensor.shape) == 2:
-                    mask_tensor = mask_tensor.unsqueeze(0)  # Add channel dimension
-                if mask_tensor.shape[0] == 1:
-                    mask_tensor = mask_tensor.repeat(3, 1, 1)  # Repeat for RGB channels
-                mask_tensor = mask_tensor.unsqueeze(0)  # Add batch dimension
-                mask_tensor = mask_tensor.to(self.ref_image_tensor.device)
+                # # compute masked lpips value
+                # mask_np = self.ip2p_ptd.mask
+                # # Convert mask to tensor and ensure it's the right shape/device
+                # mask_tensor = torch.from_numpy(mask_np).float()
+                # if len(mask_tensor.shape) == 2:
+                #     mask_tensor = mask_tensor.unsqueeze(0)  # Add channel dimension
+                # if mask_tensor.shape[0] == 1:
+                #     mask_tensor = mask_tensor.repeat(3, 1, 1)  # Repeat for RGB channels
+                # mask_tensor = mask_tensor.unsqueeze(0)  # Add batch dimension
+                # mask_tensor = mask_tensor.to(self.ref_image_tensor.device)
 
-                # Apply mask to both images
-                masked_model_rgb = rendered_image_secret * mask_tensor
+                # # Apply mask to both images
+                # masked_model_rgb = rendered_image_secret * mask_tensor
 
-                edge_loss = self.edge_loss_fn(
-                    masked_model_rgb.to(self.config_secret.device), 
-                    self.ip2p_ptd.ref_img_tensor.to(self.config_secret.device),
-                    self.original_secret_edges.to(self.config_secret.device),
-                    image_dir,
-                    step,
-                    mask_tensor
-                )
+                # edge_loss = self.edge_loss_fn(
+                #     masked_model_rgb.to(self.config_secret.device), 
+                #     self.ip2p_ptd.ref_img_tensor.to(self.config_secret.device),
+                #     self.original_secret_edges.to(self.config_secret.device),
+                #     image_dir,
+                #     step,
+                #     mask_tensor
+                # )
 
-                metrics_dict["secret_edge_loss"] = edge_loss * self.config_secret.edge_loss_weight
-                loss_dict["secret_edge_loss"] = edge_loss * self.config_secret.edge_loss_weight
+                # metrics_dict["secret_edge_loss"] = edge_loss * self.config_secret.edge_loss_weight
+                # loss_dict["secret_edge_loss"] = edge_loss * self.config_secret.edge_loss_weight
                 ############################ for edge loss ########################
 
                 # ############################ for lseg loss ########################
-                # [1, 512, 256, 256]
+                # # [1, 512, 256, 256]
                 # rendered_image_sem_feature = self.lseg_model.get_image_features(rendered_image_secret.to(self.config_secret.device))
                 # rendered_image_logits = self.lseg_model.decode_feature(rendered_image_sem_feature)
                 # rendered_semantic = self.lseg_model.visualize_sem(rendered_image_logits) # (c, h, w)
@@ -1053,6 +1061,19 @@ class DNSplatterPipeline(VanillaPipeline):
                 # metrics_dict["secret_lseg_loss"] = lseg_loss * self.config_secret.lseg_loss_weight
                 # loss_dict["secret_lseg_loss"] = lseg_loss * self.config_secret.lseg_loss_weight
                 # ############################ for lseg loss ########################
+
+                # ############################ for sam2 loss ########################
+                self.sam2_predictor.set_image(rendered_image_secret.to(self.config_secret.device))
+                rendered_image_sam2_feature = self.sam2_predictor._features
+
+                # l1 loss
+                # lseg_loss = torch.nn.functional.l1_loss(rendered_image_sem_feature, self.original_image_sem_feature)
+                # cross loss
+                sam2_loss = (1 - torch.nn.functional.cosine_similarity(rendered_image_sam2_feature, self.original_image_sam2_feature, dim=1)).mean()
+
+                metrics_dict["secret_sam2_loss"] = sam2_loss * self.config_secret.sam2_loss_weight
+                loss_dict["secret_sam2_loss"] = sam2_loss * self.config_secret.sam2_loss_weight
+                # ############################ for sam2 loss ########################
 
             # regular updating after editing
             else:
