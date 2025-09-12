@@ -91,7 +91,7 @@ class SobelEdgeLoss(nn.Module):
         self.sobel = SobelFilter(ksize, use_grayscale)
         self.loss_type = loss_type
         
-    def forward(self, pred, target, original_edges, image_dir, step, mask_tensor):
+    def forward(self, pred, target, original_edges, image_dir, step, mask_tensor=None):
         """
         Compute edge-aware loss between predicted and target images
         Args:
@@ -103,9 +103,9 @@ class SobelEdgeLoss(nn.Module):
         # Compute edge maps
         edges_pred = self.sobel(pred)
         edges_target = self.sobel(target)
-        
-        original_edges = original_edges * mask_tensor
-        edges_target = edges_target * mask_tensor
+        if mask_tensor is not None:
+            original_edges = original_edges * mask_tensor
+            edges_target = edges_target * mask_tensor
 
         if step % 50 == 0:
             edges_pred_np = edges_pred.detach().cpu()
@@ -140,7 +140,8 @@ class SobelEdgeLoss(nn.Module):
         edges_target += original_edges # too shallow target edge
         # edges_target += 0.5 * original_edges
         # mask out the result
-        edges_target = edges_target * mask_tensor
+        if mask_tensor is not None:
+            edges_target = edges_target * mask_tensor
         
         # Compute loss
         if self.loss_type == 'l1':

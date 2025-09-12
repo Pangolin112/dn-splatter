@@ -50,7 +50,7 @@ ref_steps: 500 # default: 100
 
 latent_rgb_optimize: False # default: False
 
-conditioning_scale: 1.0 #fully depth conditioned, 0.0 no depth condition
+conditioning_scale: 1.0 #1.0 fully depth conditioned, 0.0 no depth condition
 
 ref_linear: True # default: True, use linear timesteps; False, use dreamtime timesteps
 
@@ -138,7 +138,7 @@ l1_weight: 0.5 # default: 0.5, weight for L1 loss
 
 # edge loss
 use_grayscale: True # default: True, use grayscale for edge detection; False, use RGB edges
-edge_loss_weight: 10.0 # default 1.0 (at first around 0.2)
+edge_loss_weight: 5.0 # default 1.0 (at first around 0.2)
 
 # ref loss
 ref_loss_weight: 2.0 # default: 2.0, weight for ref loss, a content loss of ref image added to the original rgb (L1 + lpips loss
@@ -148,7 +148,10 @@ non_secret_loss_weight: 1.0 # loss weight for non-secret view updating, a lower 
 lseg_loss_weight: 10.0 # default: 10.0
 
 # sam2 loss
-sam2_loss_weight: 1.0
+sam2_loss_weight: 5.0
+
+# dinov2 loss
+dinov2_loss_weight: 5.0
 
 # camera pose optimization
 pose_learning_rate: 5e-3
@@ -159,4 +162,9 @@ max_translation_offset: 0.3  # Adjust based on your scene scale
 max_rotation_offset: 0.3     # Radians
 
 # dataset downsample
-downsample_factor: 40  # 8 for 49a82360aa, 40.0 for other 2 scenes, use 10 to reduce floaters
+downsample_factor: 8 #40  # 8 for 49a82360aa, 40.0 for other 2 scenes, use 10 to reduce floaters
+
+# deal with floaters
+disable_floater: False # default: False; if True, disable the updating of means, scales, opacities and quats to prevent floaters
+opacity_reg_weight: 0.1
+mean_reg_weight: 0.1

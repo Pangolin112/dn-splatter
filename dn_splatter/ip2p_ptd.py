@@ -390,7 +390,8 @@ class IP2P_PTD(nn.Module):
         cv2.imwrite(f'./outputs/jittered_images/{self.ref_name}_mask.png', mask_array)
 
         # start DDIM inversion
-        self.DDIM_inversion()
+        # self.DDIM_inversion() # comment to save time, uncomment for baseline 
+        self.ref_latent_init = torch.load('latent_face1.jpg.pt').cuda().to(self.dtype)
 
         # second secret latent
         # self.ref_latent_path_2 = 'latent_face1.jpg.pt'
