@@ -40,6 +40,7 @@ gsdf = 'dn_splatter:GSDFStudioDataParserSpecification'
 scannetpp = 'dn_splatter:ScanNetppDataParserSpecification'
 coolermap = 'dn_splatter:CoolerMapDataParserSpecification'
 normal-nerfstudio = 'dn_splatter:NormalNerfstudioSpecification'
+semantic-normal-nerfstudio = 'dn_splatter:SemanticNormalNerfstudioSpecification'
 
 [project.scripts]
 # export mesh scripts

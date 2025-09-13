@@ -65,6 +65,7 @@ class DNSplatterDataManager(FullImageDatamanager):
         ######################################################
         # Secret view updating                              
         ######################################################
+        # print("\n meta data semantic filenames: \n", self.train_dataparser_outputs.metadata["semantic_filenames"])
         # from igs2gs_datamanager.py
         # add depth into the cache
         depth_fnames = self.train_dataparser_outputs.metadata.get("depth_filenames", None)
@@ -76,10 +77,21 @@ class DNSplatterDataManager(FullImageDatamanager):
                 depth_t  = torch.from_numpy(depth_np)[None, ...]
                 sample["depth"] = to_device(depth_t)
 
+        # semantic adaptation
+        semantic_fnames = self.train_dataparser_outputs.metadata.get("semantic_filenames", None)
+        if semantic_fnames is not None:
+            # choose whether to keep CPU or move to GPU based on your cache_images setting
+            to_device = (lambda x: x.to(self.device)) if self.config.cache_images == "gpu" else (lambda x: x)
+            for sample, semantic_path in zip(self.cached_train, semantic_fnames):
+                semantic_np = cv2.imread(str(semantic_path), cv2.IMREAD_UNCHANGED).astype(np.float32)
+                semantic_t  = torch.from_numpy(semantic_np)[None, ...]
+                sample["semantic"] = to_device(semantic_t)
+
         # cache original training images for ip2p
         self.original_cached_train = deepcopy(self.cached_train)
         self.original_cached_eval = deepcopy(self.cached_eval)
         ######################################################
+        
 
         metadata = self.train_dataparser_outputs.metadata
         self.load_depths = (
@@ -89,6 +101,8 @@ class DNSplatterDataManager(FullImageDatamanager):
             or ("mono_depth_filenames") in metadata
             else False
         )
+
+        self.load_semantics = True if ("semantic_filenames" in metadata) else False
 
         self.load_normals = True if ("normal_filenames" in metadata) else False
         self.load_confidence = True if ("confidence_filenames" in metadata) else False

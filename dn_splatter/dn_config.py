@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dn_splatter.data.normal_nerfstudio import NormalNerfstudioConfig
+from dn_splatter.data.semantic_normal_nerfstudio import SemanticNormalNerfstudioConfig
 from dn_splatter.dn_datamanager import DNSplatterManagerConfig
 from dn_splatter.dn_model import DNSplatterModelConfig
 from dn_splatter.dn_pipeline import DNSplatterPipelineConfig
@@ -26,7 +27,7 @@ dn_splatter = MethodSpecification(
         gradient_accumulation_steps={"camera_opt": 100, "color": 10, "shs": 10},
         pipeline=DNSplatterPipelineConfig(
             datamanager=DNSplatterManagerConfig(
-                dataparser=NormalNerfstudioConfig(load_3D_points=True)
+                dataparser=SemanticNormalNerfstudioConfig(load_3D_points=True)
             ),
             model=DNSplatterModelConfig(regularization_strategy="dn-splatter"),
         ),
