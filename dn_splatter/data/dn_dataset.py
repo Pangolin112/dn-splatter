@@ -24,7 +24,7 @@ class GDataset(InputDataset):
     ):
         """
         Args:
-            dataparser_outputs: dataparser outputs that should have depth/normal data.
+            dataparser_outputs: dataparser outputs that should have depth/normal/semantic data.
             scale_factor: Scale factor for depth data.
             depth_mode: What depth data to load if more than one present.
             normal_format: format that the normal data is stored in.
@@ -41,6 +41,12 @@ class GDataset(InputDataset):
             self.load_normals = self.metadata["load_normals"]
         else:
             self.load_normals = False
+        
+        # semantics
+        if "load_semantics" in self.metadata:
+            self.load_semantics = self.metadata["load_semantics"]
+        else:
+            self.load_semantics = False
 
         if "load_confidence" in self.metadata:
             self.load_confidence = self.metadata["load_confidence"]
@@ -112,6 +118,20 @@ class GDataset(InputDataset):
             assert "normal_filenames" in self.metadata
             self.normal_filenames = self.metadata["normal_filenames"]
 
+        # semantics check 
+        if self.load_semantics and (
+            "semantic_filenames" not in dataparser_outputs.metadata.keys()
+            or dataparser_outputs.metadata["semantic_filenames"] is None
+        ):
+            CONSOLE.print(
+                "[bold yellow] No semantic data found, although use semantics has been set to True in datamanager! Quitting!"
+            )
+            quit()
+
+        if self.load_semantics:
+            assert "semantic_filenames" in self.metadata
+            self.semantic_filenames = self.metadata["semantic_filenames"]
+
         if self.load_confidence:
             assert "confidence_filenames" in self.metadata
             self.confidence_filenames = self.metadata["confidence_filenames"]
@@ -120,6 +140,7 @@ class GDataset(InputDataset):
         metadata = {}
         depth_data = {}
         normal_data = {}
+        semantic_data = {}
         confidence_data = {}
         if self.load_depths:
             # try to load depth data
@@ -178,6 +199,14 @@ class GDataset(InputDataset):
             )
             normal_data.update({"normal": normal_image})
 
+        if self.load_semantics:
+            assert self.semantic_filenames is not None
+            filepath = self.semantic_filenames[data["image_idx"]]
+            semantic_image = self.get_semantic_image_from_path(
+                Path(filepath)
+            )
+            semantic_data.update({"semantic": semantic_image})
+
         if self.load_confidence:
             assert self.confidence_filenames is not None
             filepath = self.confidence_filenames[data["image_idx"]]
@@ -190,6 +219,7 @@ class GDataset(InputDataset):
             confidence_data.update({"confidence": confidence_image})
         metadata.update(depth_data)
         metadata.update(normal_data)
+        metadata.update(semantic_data)
         metadata.update(confidence_data)
         return metadata
 
@@ -266,3 +296,21 @@ class GDataset(InputDataset):
             # TODO: figure out what to do with normal data if masks present ...
             pass
         return normal_map
+
+    def get_semantic_image_from_path(
+        self,
+        path,
+    ):
+        """Helper function to load semantic data
+
+        Args:
+            path: path to semantic file
+        """
+        if path.suffix == ".png":
+            semantic_map = np.array(Image.open(path), dtype="uint8")[..., :3]
+        else:
+            raise ValueError(f"Unsupported file format: {path.suffix}")
+
+        semantic_map = torch.from_numpy(semantic_map.astype("float32") / 255.0).float()
+
+        return semantic_map

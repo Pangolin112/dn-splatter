@@ -1,5 +1,5 @@
 """
-Datamanager that processes optional depth and normal data.
+Datamanager that processes optional depth, semantic and normal data.
 """
 
 import random
@@ -166,6 +166,20 @@ class DNSplatterDataManager(FullImageDatamanager):
                     data["image"].shape[:2],
                     antialias=None,
                 ).permute(1, 2, 0)
+                
+        # load semantics
+        if self.load_semantics:
+            assert "semantic" in data
+            data["semantic"] = data["semantic"].to(self.device)
+            if data["semantic"].shape != data["image"].shape:
+                data["semantic"] = data["semantic"].squeeze(0)
+                data["semantic"] = TF.resize(
+                    data["semantic"].permute(2, 0, 1),
+                    data["image"].shape[:2],
+                    antialias=None,
+                ).permute(1, 2, 0)
+                data["semantic"] = data["semantic"].unsqueeze(0)
+        
         if self.load_confidence:
             assert "confidence" in data
             data["confidence"] = data["confidence"].to(self.device)
@@ -229,6 +243,16 @@ class DNSplatterDataManager(FullImageDatamanager):
                     data["image"].shape[:2],
                     antialias=None,
                 ).permute(1, 2, 0)
+        # load semantics
+        if self.load_semantics:
+            assert "semantic" in data
+            data["semantic"] = data["semantic"].to(self.device)
+            if data["semantic"].shape != data["image"].shape:
+                data["semantic"] = TF.resize(
+                    data["semantic"].permute(2, 0, 1),
+                    data["image"].shape[:2],
+                    antialias=None,
+                ).permute(1, 2, 0)
         if self.load_confidence:
             assert "confidence" in data
             data["confidence"] = data["confidence"].to(self.device)
@@ -280,6 +304,10 @@ class DNSplatterDataManager(FullImageDatamanager):
         if self.load_normals:
             assert "normal" in data
             data["normal"] = data["normal"].to(self.device)
+        # load semantics
+        if self.load_semantics:
+            assert "semantic" in data
+            data["semantic"] = data["semantic"].to(self.device)
         if self.load_confidence:
             assert "confidence" in data
             data["confidence"] = data["confidence"].to(self.device)
@@ -424,7 +452,7 @@ class DNSplatterDataManager(FullImageDatamanager):
             
             # List of filename keys that might need updating
             filename_keys = ['depth_filenames', 'sensor_depth_filenames', 
-                            'mono_depth_filenames', 'normal_filenames', 
+                            'mono_depth_filenames', 'normal_filenames', 'semantic_filenames',
                             'confidence_filenames']
             
             for key in filename_keys:

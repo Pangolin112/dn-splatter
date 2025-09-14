@@ -162,9 +162,12 @@ max_translation_offset: 0.3  # Adjust based on your scene scale
 max_rotation_offset: 0.3     # Radians
 
 # dataset downsample
-downsample_factor: 8 #40  # 8 for 49a82360aa, 40.0 for other 2 scenes, use 10 to reduce floaters
+downsample_factor: 40 #40  # 8 for 49a82360aa, 40.0 for other 2 scenes, use 10 to reduce floaters
 
 # deal with floaters
 disable_floater: False # default: False; if True, disable the updating of means, scales, opacities and quats to prevent floaters
 opacity_reg_weight: 0.1
 mean_reg_weight: 0.1
+
+# semantic histogram loss
+semantic_histogram_loss_weight: 100.0 # default: 1.0

@@ -98,6 +98,11 @@ from sam2.sam2_image_predictor import SAM2ImagePredictor
 # clip
 import open_clip
 
+# histogram semantic
+from dn_splatter.utils.histogram_semantic_utils import (
+    compute_histogram_loss_color_segments,
+)
+
 
 def interpolate_to_patch_size(img_bchw, patch_size):
     # Interpolate the image so that H and W are multiples of the patch size
@@ -262,43 +267,46 @@ class DNSplatterPipeline(VanillaPipeline):
         # original secret edges
         self.original_secret_edges = SobelFilter(ksize=3, use_grayscale=self.config_secret.use_grayscale)(self.original_image_secret)
         
-        # lseg model
-        self.lseg_model = lseg_module_init()
-        with torch.no_grad():
-            self.original_image_sem_feature = self.lseg_model.get_image_features(self.original_image_secret.to(self.config_secret.device))
+        # # lseg model
+        # self.lseg_model = lseg_module_init()
+        # with torch.no_grad():
+        #     self.original_image_sem_feature = self.lseg_model.get_image_features(self.original_image_secret.to(self.config_secret.device))
 
-        # sam2 model
-        self.sam2_predictor = SAM2ImagePredictor.from_pretrained("facebook/sam2.1-hiera-large")
-        # ref: https://github.com/facebookresearch/sam2/blob/2b90b9f5ceec907a1c18123530e92e794ad901a4/sam2/sam2_image_predictor.py#L117
-        with torch.no_grad():
-            # input image should be of size 1x3xHxW
-            backbone_out = self.sam2_predictor.model.forward_image(self.original_image_secret.to(self.config_secret.device))
-            _, vision_feats, _, _ = self.sam2_predictor.model._prepare_backbone_features(backbone_out)
-            # Add no_mem_embed, which is added to the lowest rest feat. map during training on videos
-            if self.sam2_predictor.model.directly_add_no_mem_embed:
-                vision_feats[-1] = vision_feats[-1] + self.sam2_predictor.model.no_mem_embed
+        # # sam2 model
+        # self.sam2_predictor = SAM2ImagePredictor.from_pretrained("facebook/sam2.1-hiera-large")
+        # # ref: https://github.com/facebookresearch/sam2/blob/2b90b9f5ceec907a1c18123530e92e794ad901a4/sam2/sam2_image_predictor.py#L117
+        # with torch.no_grad():
+        #     # input image should be of size 1x3xHxW
+        #     backbone_out = self.sam2_predictor.model.forward_image(self.original_image_secret.to(self.config_secret.device))
+        #     _, vision_feats, _, _ = self.sam2_predictor.model._prepare_backbone_features(backbone_out)
+        #     # Add no_mem_embed, which is added to the lowest rest feat. map during training on videos
+        #     if self.sam2_predictor.model.directly_add_no_mem_embed:
+        #         vision_feats[-1] = vision_feats[-1] + self.sam2_predictor.model.no_mem_embed
 
-            feats = [
-                feat.permute(1, 2, 0).reshape(1, -1, *feat_size)
-                for feat, feat_size in zip(vision_feats[::-1], self.sam2_predictor._bb_feat_sizes[::-1])
-            ][::-1]
-            self.original_image_sam2_feature = feats[-1]
+        #     feats = [
+        #         feat.permute(1, 2, 0).reshape(1, -1, *feat_size)
+        #         for feat, feat_size in zip(vision_feats[::-1], self.sam2_predictor._bb_feat_sizes[::-1])
+        #     ][::-1]
+        #     self.original_image_sam2_feature = feats[-1]
 
-        # dinov2 model
-        print("Loading DINOv2 model...")
-        dinov2 = torch.hub.load('facebookresearch/dinov2', 'dinov2_vits14')
-        self.dinov2 = dinov2.to(self.config_secret.device)
+        # # dinov2 model
+        # print("Loading DINOv2 model...")
+        # dinov2 = torch.hub.load('facebookresearch/dinov2', 'dinov2_vits14')
+        # self.dinov2 = dinov2.to(self.config_secret.device)
 
-        image, target_H, target_W = interpolate_to_patch_size(self.original_image_secret, self.dinov2.patch_size)
-        image = image.cuda()
-        with torch.no_grad():
-            features = self.dinov2.forward_features(image)["x_norm_patchtokens"][0]
+        # image, target_H, target_W = interpolate_to_patch_size(self.original_image_secret, self.dinov2.patch_size)
+        # image = image.cuda()
+        # with torch.no_grad():
+        #     features = self.dinov2.forward_features(image)["x_norm_patchtokens"][0]
 
-            features = features.cpu()
+        #     features = features.cpu()
 
-            features_hwc = features.reshape((target_H // self.dinov2.patch_size, target_W // self.dinov2.patch_size, -1))
-            features_chw = features_hwc.permute((2, 0, 1))
-            self.original_image_dinov2_feature = features_chw.to(self.config_secret.device)
+        #     features_hwc = features.reshape((target_H // self.dinov2.patch_size, target_W // self.dinov2.patch_size, -1))
+        #     features_chw = features_hwc.permute((2, 0, 1))
+        #     self.original_image_dinov2_feature = features_chw.to(self.config_secret.device)
+
+        # semantic map
+        self.semantic_map_secret = self.data_secret["semantic"].permute(0, 3, 1, 2) # [1, c, h, w]
 
         # miou metric
         self.miou = MeanIoU(
@@ -999,11 +1007,11 @@ class DNSplatterPipeline(VanillaPipeline):
 
             # dataset downsampling and return the new secret idx
             self.config_secret.secret_view_idx = self.datamanager.downsample_dataset(self.config_secret.downsample_factor, self.config_secret.secret_view_idx)
-            # save original semantic map
-            original_image_logits = self.lseg_model.decode_feature(self.original_image_sem_feature)
-            original_semantic = self.lseg_model.visualize_sem(original_image_logits) # (c, h, w)
-            save_image(original_semantic, image_dir / f'{step}_original_semantic.png')
-            save_image(self.original_image_secret, image_dir / f'{step}_original_image.png')
+            # # save original semantic map
+            # original_image_logits = self.lseg_model.decode_feature(self.original_image_sem_feature)
+            # original_semantic = self.lseg_model.visualize_sem(original_image_logits) # (c, h, w)
+            # save_image(original_semantic, image_dir / f'{step}_original_semantic.png')
+            # save_image(self.original_image_secret, image_dir / f'{step}_original_image.png')
 
         # start editing
         if (step % self.config.gs_steps) == 0 and (self.first_SequentialEdit): # update also for the first step
@@ -1076,31 +1084,31 @@ class DNSplatterPipeline(VanillaPipeline):
                 ############################ prepare secret rendering ######################## 
 
                 ############################ for edge loss ########################
-                # compute masked lpips value
-                mask_np = self.ip2p_ptd.mask
-                # Convert mask to tensor and ensure it's the right shape/device
-                mask_tensor = torch.from_numpy(mask_np).float()
-                if len(mask_tensor.shape) == 2:
-                    mask_tensor = mask_tensor.unsqueeze(0)  # Add channel dimension
-                if mask_tensor.shape[0] == 1:
-                    mask_tensor = mask_tensor.repeat(3, 1, 1)  # Repeat for RGB channels
-                mask_tensor = mask_tensor.unsqueeze(0)  # Add batch dimension
-                mask_tensor = mask_tensor.to(self.ref_image_tensor.device)
+                # # compute masked lpips value
+                # mask_np = self.ip2p_ptd.mask
+                # # Convert mask to tensor and ensure it's the right shape/device
+                # mask_tensor = torch.from_numpy(mask_np).float()
+                # if len(mask_tensor.shape) == 2:
+                #     mask_tensor = mask_tensor.unsqueeze(0)  # Add channel dimension
+                # if mask_tensor.shape[0] == 1:
+                #     mask_tensor = mask_tensor.repeat(3, 1, 1)  # Repeat for RGB channels
+                # mask_tensor = mask_tensor.unsqueeze(0)  # Add batch dimension
+                # mask_tensor = mask_tensor.to(self.ref_image_tensor.device)
 
-                # Apply mask to both images
-                masked_model_rgb = rendered_image_secret * mask_tensor
+                # # Apply mask to both images
+                # masked_model_rgb = rendered_image_secret * mask_tensor
 
-                edge_loss = self.edge_loss_fn(
-                    masked_model_rgb.to(self.config_secret.device), 
-                    self.ip2p_ptd.ref_img_tensor.to(self.config_secret.device),
-                    self.original_secret_edges.to(self.config_secret.device),
-                    image_dir,
-                    step,
-                    mask_tensor
-                )
+                # edge_loss = self.edge_loss_fn(
+                #     masked_model_rgb.to(self.config_secret.device), 
+                #     self.ip2p_ptd.ref_img_tensor.to(self.config_secret.device),
+                #     self.original_secret_edges.to(self.config_secret.device),
+                #     image_dir,
+                #     step,
+                #     mask_tensor
+                # )
 
-                metrics_dict["secret_edge_loss"] = edge_loss * self.config_secret.edge_loss_weight
-                loss_dict["secret_edge_loss"] = edge_loss * self.config_secret.edge_loss_weight
+                # metrics_dict["secret_edge_loss"] = edge_loss * self.config_secret.edge_loss_weight
+                # loss_dict["secret_edge_loss"] = edge_loss * self.config_secret.edge_loss_weight
                 ############################ for edge loss ########################
 
                 # ############################ for lseg loss ########################
@@ -1121,25 +1129,25 @@ class DNSplatterPipeline(VanillaPipeline):
                 # ############################ for lseg loss ########################
 
                 # ############################ for sam2 loss ########################
-                backbone_out = self.sam2_predictor.model.forward_image(rendered_image_secret.to(self.config_secret.device))
-                _, vision_feats, _, _ = self.sam2_predictor.model._prepare_backbone_features(backbone_out)
-                # Add no_mem_embed, which is added to the lowest rest feat. map during training on videos
-                if self.sam2_predictor.model.directly_add_no_mem_embed:
-                    vision_feats[-1] = vision_feats[-1] + self.sam2_predictor.model.no_mem_embed
+                # backbone_out = self.sam2_predictor.model.forward_image(rendered_image_secret.to(self.config_secret.device))
+                # _, vision_feats, _, _ = self.sam2_predictor.model._prepare_backbone_features(backbone_out)
+                # # Add no_mem_embed, which is added to the lowest rest feat. map during training on videos
+                # if self.sam2_predictor.model.directly_add_no_mem_embed:
+                #     vision_feats[-1] = vision_feats[-1] + self.sam2_predictor.model.no_mem_embed
 
-                feats = [
-                    feat.permute(1, 2, 0).reshape(1, -1, *feat_size)
-                    for feat, feat_size in zip(vision_feats[::-1], self.sam2_predictor._bb_feat_sizes[::-1])
-                ][::-1]
-                rendered_image_sam2_feature = feats[-1]
+                # feats = [
+                #     feat.permute(1, 2, 0).reshape(1, -1, *feat_size)
+                #     for feat, feat_size in zip(vision_feats[::-1], self.sam2_predictor._bb_feat_sizes[::-1])
+                # ][::-1]
+                # rendered_image_sam2_feature = feats[-1]
 
-                # l1 loss
-                # lseg_loss = torch.nn.functional.l1_loss(rendered_image_sem_feature, self.original_image_sem_feature)
-                # cross loss
-                sam2_loss = (1 - torch.nn.functional.cosine_similarity(rendered_image_sam2_feature, self.original_image_sam2_feature, dim=1)).mean()
+                # # l1 loss
+                # # lseg_loss = torch.nn.functional.l1_loss(rendered_image_sem_feature, self.original_image_sem_feature)
+                # # cross loss
+                # sam2_loss = (1 - torch.nn.functional.cosine_similarity(rendered_image_sam2_feature, self.original_image_sam2_feature, dim=1)).mean()
 
-                metrics_dict["secret_sam2_loss"] = sam2_loss * self.config_secret.sam2_loss_weight
-                loss_dict["secret_sam2_loss"] = sam2_loss * self.config_secret.sam2_loss_weight
+                # metrics_dict["secret_sam2_loss"] = sam2_loss * self.config_secret.sam2_loss_weight
+                # loss_dict["secret_sam2_loss"] = sam2_loss * self.config_secret.sam2_loss_weight
                 # ############################ for sam2 loss ########################
 
                 # ############################ for dinov2 loss ########################
@@ -1159,6 +1167,15 @@ class DNSplatterPipeline(VanillaPipeline):
                 # metrics_dict["secret_dinov2_loss"] = dinov2_loss * self.config_secret.dinov2_loss_weight
                 # loss_dict["secret_dinov2_loss"] = dinov2_loss * self.config_secret.dinov2_loss_weight
                 # ############################ for dinov2 loss ########################
+
+                # ############################ for semantic histogram loss ########################
+                semantic_loss, segment_info = compute_histogram_loss_color_segments(
+                    self.semantic_map_secret, rendered_image_secret, self.original_image_secret.to(self.config_secret.device),
+                    distance_type='wasserstein'
+                )
+                metrics_dict["secret_semantic_histogram_loss"] = semantic_loss * self.config_secret.semantic_histogram_loss_weight
+                loss_dict["secret_semantic_histogram_loss"] = semantic_loss * self.config_secret.semantic_histogram_loss_weight
+                # ############################ for semantic histogram loss ########################
 
             # regular updating after editing
             else:
